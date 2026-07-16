@@ -19,7 +19,7 @@ class _FakeProvider:
     def resolve_symbol(self, q):
         return q.upper()
 
-    def get_ohlcv(self, symbol, start, end, interval="1d"):
+    def get_ohlcv(self, symbol, start, end, interval="1d", adjust="default"):
         if symbol == self.fail_symbol:
             raise ValueError("simulated outage")
         idx = pd.date_range("2026-01-01", periods=5, freq="D")
@@ -66,6 +66,7 @@ def test_run_snapshot_writes_files_and_manifest(tmp_path, monkeypatch, golden_fi
     )
     day = tmp_path / "snaps" / "2026-07-16"
     assert (day / "US" / "AAA" / "ohlcv.csv").exists()
+    assert (day / "US" / "AAA" / "ohlcv_raw.csv").exists()  # 事实层双抓（ADR-0003）
     assert (day / "US" / "AAA" / "fundamentals.json").exists()
     assert (day / "US" / "AAA" / "news.json").exists()
     assert (day / "manifest.json").exists()

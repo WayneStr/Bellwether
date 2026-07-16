@@ -48,9 +48,18 @@ class MarketDataProvider(ABC):
 
     @abstractmethod
     def get_ohlcv(
-        self, symbol: str, start: date, end: date, interval: str = "1d"
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+        interval: str = "1d",
+        adjust: str = "default",
     ) -> pd.DataFrame:
-        """返回 OHLCV，索引为日期，列为 open/high/low/close/volume。"""
+        """返回 OHLCV，索引为日期。
+
+        adjust="default"：复权视图（CN/HK qfq、US auto_adjust），供分析模块使用；
+        adjust="raw"：不复权原始价（A0 事实层，US 额外含 dividends/stock splits 列）。
+        """
 
     @abstractmethod
     def get_fundamentals(self, symbol: str) -> FundamentalData: ...

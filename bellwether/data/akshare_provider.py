@@ -106,11 +106,17 @@ class AkshareCNProvider(MarketDataProvider):
         return query.strip().upper()
 
     def get_ohlcv(
-        self, symbol: str, start: date, end: date, interval: str = "1d"
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+        interval: str = "1d",
+        adjust: str = "default",
     ) -> pd.DataFrame:
         ak = _require_akshare()
         code = self._to_code(symbol)
-        key = f"ohlcv:CN:{code}:{start}:{end}:{interval}"
+        key = f"ohlcv:CN:{code}:{start}:{end}:{interval}:{adjust}"
+        ak_adjust = "" if adjust == "raw" else "qfq"  # ""=不复权原始价（A0 事实层）
 
         def _load() -> pd.DataFrame:
             return _normalize_hist(
@@ -119,7 +125,7 @@ class AkshareCNProvider(MarketDataProvider):
                     period="daily",
                     start_date=start.strftime("%Y%m%d"),
                     end_date=end.strftime("%Y%m%d"),
-                    adjust="qfq",
+                    adjust=ak_adjust,
                 )
             )
 
@@ -170,15 +176,21 @@ class AkshareHKProvider(MarketDataProvider):
         return query.strip().upper()
 
     def get_ohlcv(
-        self, symbol: str, start: date, end: date, interval: str = "1d"
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+        interval: str = "1d",
+        adjust: str = "default",
     ) -> pd.DataFrame:
         ak = _require_akshare()
         code = self._to_code(symbol)
-        key = f"ohlcv:HK:{code}:{start}:{end}:{interval}"
+        key = f"ohlcv:HK:{code}:{start}:{end}:{interval}:{adjust}"
+        ak_adjust = "" if adjust == "raw" else "qfq"
 
         def _load() -> pd.DataFrame:
             # 东财港股接口（33.push2his）部分网络不可达，改用新浪源（英文列、返回全历史）
-            df = ak.stock_hk_daily(symbol=code, adjust="qfq")
+            df = ak.stock_hk_daily(symbol=code, adjust=ak_adjust)
             if df is None or df.empty:
                 raise ValueError(f"未取到 {symbol} 的港股行情")
             df = df.copy()

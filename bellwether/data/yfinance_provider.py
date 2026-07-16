@@ -20,15 +20,30 @@ class YFinanceProvider(MarketDataProvider):
     source = "yfinance"
 
     def get_ohlcv(
-        self, symbol: str, start: date, end: date, interval: str = "1d"
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+        interval: str = "1d",
+        adjust: str = "default",
     ) -> pd.DataFrame:
-        key = f"ohlcv:{self.market}:{symbol}:{start}:{end}:{interval}"
+        key = f"ohlcv:{self.market}:{symbol}:{start}:{end}:{interval}:{adjust}"
+        raw_mode = adjust == "raw"
 
         def _load() -> pd.DataFrame:
             df = yf.Ticker(symbol).history(
-                start=start, end=end, interval=interval, auto_adjust=True
+                start=start,
+                end=end,
+                interval=interval,
+                auto_adjust=not raw_mode,
+                actions=raw_mode,  # raw 模式带分红/拆股事件列（A0 事实层）
             )
-            df = df.rename(columns=str.lower).reindex(columns=_OHLCV_COLS)
+            df = df.rename(columns=str.lower)
+            if raw_mode:
+                keep = [c for c in ("open", "high", "low", "close", "volume", "dividends", "stock splits") if c in df.columns]
+                df = df[keep]
+            else:
+                df = df.reindex(columns=_OHLCV_COLS)
             # 去掉价格缺失的行：yfinance 尾部偶发 NaN（未收盘/停牌），否则污染 last_close 等
             df = df.dropna(subset=["open", "high", "low", "close"])
             if df.empty:

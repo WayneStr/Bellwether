@@ -19,7 +19,7 @@ from pathlib import Path
 
 from .data.base import ProviderRegistry
 
-SCHEMA_VERSION = 1  # manifest 结构版本；演进策略见 RFC-002
+SCHEMA_VERSION = 2  # v2: 新增 ohlcv_raw（不复权事实层，RFC-002 D12/ADR-0003）；演进策略见 RFC-002
 DEFAULT_ROOT = Path.home() / ".bellwether" / "snapshots"
 LOOKBACK_DAYS = 400
 SMOKE_PER_MARKET = 3
@@ -65,9 +65,18 @@ def snapshot_symbol(symbol: str, market: str, day_dir: Path, *, lookback_days: i
         df = provider.get_ohlcv(sym, start, end)
         fp = out_dir / "ohlcv.csv"
         df.to_csv(fp)
-        entry["files"]["ohlcv"] = _file_meta(fp, day_dir, rows=len(df))
+        entry["files"]["ohlcv"] = _file_meta(fp, day_dir, rows=len(df), adjust="default")
     except Exception as exc:
         entry["errors"]["ohlcv"] = str(exc)
+
+    try:
+        # 事实层：不复权原始价（复权视图会因未来分红/送转全序列重写，只有 raw 不可重写）
+        df_raw = provider.get_ohlcv(sym, start, end, adjust="raw")
+        fp = out_dir / "ohlcv_raw.csv"
+        df_raw.to_csv(fp)
+        entry["files"]["ohlcv_raw"] = _file_meta(fp, day_dir, rows=len(df_raw), adjust="raw")
+    except Exception as exc:
+        entry["errors"]["ohlcv_raw"] = str(exc)
 
     try:
         fund = provider.get_fundamentals(sym)
