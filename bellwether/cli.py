@@ -138,6 +138,43 @@ def models(
 
 
 @app.command()
+def snapshot(
+    root: Optional[str] = typer.Option(None, "--root", help="快照根目录（默认 ~/.bellwether/snapshots）"),
+    markets: Optional[str] = typer.Option(None, "--markets", help="逗号分隔市场过滤，如 US,HK"),
+    smoke: bool = typer.Option(False, "--smoke", help="冒烟模式：每市场只抓前 3 只"),
+    delay: float = typer.Option(0.7, "--delay", help="标的间隔秒数（礼貌限流）"),
+    golden: Optional[str] = typer.Option(None, "--golden", help="自定义黄金集 toml 路径"),
+) -> None:
+    """A0 每日原始快照：黄金集行情/基本面/新闻落盘 + manifest（不调用 LLM，不需要 API key）。"""
+    from .snapshot import exit_code_for, run_snapshot
+
+    market_list = [m.strip() for m in markets.split(",")] if markets else None
+    with console.status("正在快照黄金集 ……"):
+        manifest = run_snapshot(
+            root, markets=market_list, smoke=smoke, delay=delay, golden_path=golden
+        )
+
+    total, failed = len(manifest["entries"]), len(manifest["failures"])
+    table = Table(title=f"Bellwether 快照 · {manifest['date']}{'（smoke）' if smoke else ''}")
+    table.add_column("市场", style="cyan")
+    table.add_column("成功", justify="right")
+    table.add_column("失败", justify="right")
+    per_market: dict[str, list[int]] = {}
+    for key, entry in manifest["entries"].items():
+        m = entry["market"]
+        ok_fail = per_market.setdefault(m, [0, 0])
+        ok_fail[1 if entry["errors"] else 0] += 1
+    for m, (ok, fail) in sorted(per_market.items()):
+        table.add_row(m, str(ok), f"[red]{fail}[/red]" if fail else "0")
+    console.print(table)
+    if failed:
+        console.print(f"[yellow]{failed}/{total} 个标的存在失败项，详见 manifest.failures[/yellow]")
+    code = exit_code_for(manifest)
+    if code:
+        raise typer.Exit(code=code)
+
+
+@app.command()
 def portfolio(
     symbols: list[str] = typer.Argument(..., help="多只股票代码，如 AAPL MSFT 600519"),
     period: str = typer.Option("1y", "--period", help="回溯区间，如 6mo / 1y"),
