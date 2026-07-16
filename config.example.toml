@@ -1,0 +1,37 @@
+# Bellwether 配置模板。复制为 config.toml 后按需修改；config.toml 不入库。
+# 密钥不放这里 —— 走环境变量 ANTHROPIC_API_KEY。
+
+# ── 模型配置（可自定义的核心）─────────────────────────────────
+# 角色化：轻任务用便宜模型，深度报告用强模型。model 可换成任意 Claude 模型 id：
+#   claude-opus-4-8 / claude-sonnet-5 / claude-haiku-4-5-20251001 / claude-fable-5
+# 运行时还能用 CLI 覆盖：
+#   bellwether analyze AAPL --deep --model <id> --temperature 0.2
+
+[models.parse]        # 轻量结构化（财报字段抽取、新闻解析）
+model = "claude-haiku-4-5-20251001"
+params = { temperature = 0.0, max_tokens = 2048 }
+
+[models.synthesis]    # 跨模块综合研判（agent 主循环）
+model = "claude-sonnet-5"
+params = { temperature = 0.2, max_tokens = 4096 }
+
+[models.deep_report]  # 深度报告（最可能需要自定义的一档）
+model = "claude-opus-4-8"
+params = { temperature = 0.3, max_tokens = 8192 }
+
+# ── API 请求地址（可选）──────────────────────────────────────
+# 自定义 Anthropic API 地址：用于代理 / 中转 / 兼容网关。
+# 留空或删除本段 = 用官方默认 https://api.anthropic.com。
+# 也可用环境变量 ANTHROPIC_BASE_URL（config.toml 里的值优先级更高）。
+[api]
+# base_url = "https://your-proxy.example.com"
+
+# ── 数据 ─────────────────────────────────────────────────────
+[data]
+default_market = "US"
+cache_ttl_days = 1
+
+# ── 报告 ─────────────────────────────────────────────────────
+[report]
+disclaimer = true
+language = "zh"

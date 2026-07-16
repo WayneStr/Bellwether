@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+
+# Bellwether：真实配置（含模型选择），以 config.example.toml 为模板复制生成
+config.toml
+.env
+
+# 数据缓存
+.cache/
+*.parquet
