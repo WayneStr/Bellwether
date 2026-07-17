@@ -1,9 +1,9 @@
 # RFC-001: 多智能体编排与档位
 
-> **状态**: Draft（M0 立项初稿，供评审迭代）
+> **状态**: Revised Draft v2（双评审后）· 2026-07-16
 > **作者**: WayneStr（维护者）· 起草协助: Claude deep-reasoner
-> **日期**: 2026-07-16
-> **关联任务**: B1（编排 v2）、B2（对抗审查受控实验）· 关联决策: ROADMAP §9 决策 12 · 实施里程碑: M4
+> **共享契约见 RFC-000**（snapshot_ref / AnalysisContext / EvidenceStore / CoverageReport / tool_call_id / CostLedger）
+> **关联任务**: B1（编排 v2）、B2（对抗审查受控实验）· 关联决策: ROADMAP §9 决策 12 · 实施里程碑: **trace 地基 M1/M2，编排图 M4**
 > **必答题**（ROADMAP §3）: ①每阶段预算绝对上限与降级路径 ②B2 受控实验设计与退出条件 ③trace 回放格式 ④角色图与档位设计
 
 ---
@@ -12,11 +12,11 @@
 
 **现状**：`bellwether/agent/orchestrator.py` 是一个最小单 agent tool-use loop（≤6 轮，5 个数据 tool），模型经 `ModelRouter` 三级覆盖解析（角色 parse/synthesis/deep_report）；`deep=True` 仅切换到 deep_report 角色，无编排、无预算控制、无持久化。
 
-**本 RFC 决定**：deep 档的角色图与消息 schema、两档共用的预算/降级/trace 基建、以及 B2 受控实验的完整设计。**实施在 M4**，但 trace 格式影响 E4（M1 最小版）、实验设计依赖 C2a/B0（M2），故 M0 定稿方向。
+**本 RFC 决定**：deep 档的角色图与消息 schema、两档共用的预算/降级/trace 基建、以及 B2 受控实验的完整设计。**trace 地基（StageRunner + 录制器最小版 + `replay --verify`，quick 路径）在 M1/M2 交付**（对齐 E4 最小版，解锁 M2 的 B0/C1 provenance 门禁演练——DR 1 / Codex 7 阻断）；**编排图 / deep DAG / 降级事件在 M4**；实验设计依赖 C2a/B0（M2）。
 
 **非目标**：agent 间自由对话或动态路由（角色图为静态 DAG）；跨会话 agent 记忆；并发多会话调度；REST/服务化（决策门未开）。
 
-**与其他 RFC 接口**：证据 ID 与 IR 字段以 RFC-003 为准（本文只约定「消息引用 evidence_id」）；tool 输出中的数据快照 ID 语义以 RFC-002 为准。
+**与其他 RFC 接口**：共享契约（snapshot_ref、AnalysisContext、EvidenceStore/eid、CoverageReport、tool_call_id、CostLedger）以 **RFC-000** 为准；证据 ID 与 IR 字段细节以 RFC-003 为准；数据快照与 PIT 语义以 RFC-002 为准。
 
 ---
 
@@ -106,7 +106,7 @@ payload 类型（字段为最小集，定稿随 RFC-003 IR 冻结微调）：
 
 ### D6: 双计量硬上限 + 定标协议
 
-计量原语是 token（in+out 累计），成本（USD）按 D3 定价表（内置+可覆盖）折算；**两者取先到者触发**。墙钟独立计。
+计量原语是 token（in+out 累计），成本（USD）按 ROADMAP-D3 定价表（price-book，内置+可覆盖+版本化；RFC-000 §7）折算；**两者取先到者触发**。墙钟独立计。
 
 **定标协议**：下表为初始值（依据：现有 quick 实测轮次外推 + KPI p95 quick≤60s / deep≤5min）；M4 开工时以 C2a 黄金集实测 p95×1.5 重定并写入 ADR，此后改动走配置不改代码。
 
@@ -121,7 +121,30 @@ payload 类型（字段为最小集，定稿随 RFC-003 IR 冻结微调）：
 | 综合·终稿 | 2 | 0 | 35k | 60s |
 
 **会话级硬上限**：deep ≤300k token 或 ≤$1.50（sonnet 档混合折算），墙钟软限 5min（触发快进降级）、硬限 8min（终止并以已有产物渲染残报告）；quick ≤60k token 或 ≤$0.35、墙钟 90s。各阶段上限之和（约 5.6min 最坏串行）有意大于 5min 软限——全阶段同时打满是尾部事件，由软限兜底而非压缩单阶段。
-[OPEN-2] deep 单次 $1.50 上限直接决定用户成本预期与 B2 实验总价，需维护者裁决（备选 $1.00 / $2.00 档）。
+[OPEN-BUDGET] deep 单次 $1.50 上限与评测月度封套、B2 一次性封套**联动裁决**（RFC-000 §7 CostLedger 单表；自洽性核算见下 D6a）；备选 $1.00 / $2.00 档。
+
+### D6a: 静态成本折算表与 $1.50 自洽性（DR 6）
+
+**折算假设**（定价取 ROADMAP-D3 price-book 内置默认，标 [OPEN-BUDGET]；上限分析用**无 caching 保守价**，output 占各阶段 token 上限 25%）：Opus $15/$75、Sonnet $3/$15、parse=Haiku $0.8/$4（每 M token in/out）→ blended：Opus $30/M、Sonnet $6/M、Haiku $1.6/M。
+
+| 阶段 | 模型档（D2） | token 上限 | blended/M | 名义上限 |
+|---|---|---|---|---|
+| 规划 | parse | 8k | $1.6 | $0.01 |
+| 3×分析师 | synthesis(sonnet) | 120k | $6 | $0.72 |
+| 综合·初稿 | deep_report(opus) | 25k | $30 | $0.75 |
+| 对抗审查 | deep_report(opus) | 30k | $30 | $0.90 |
+| 挑战响应 | synthesis(sonnet) | 15k | $6 | $0.09 |
+| 风控 | synthesis(sonnet) | 20k | $6 | $0.12 |
+| 综合·终稿 | deep_report(opus) | 35k | $30 | $1.05 |
+| **合计** | | **253k** | | **$3.64** |
+
+**发现**：无 caching 名义上限 $3.64（opus deep_report 三阶段独占 $2.70）远超 $1.50——$1.50 上限**隐含 caching 大幅生效的假设**（deep 会话 1–2MB 高重复上下文，input 多为 cache_read，opus cache_read≈$1.5/M）。若预算闸按名义单价折算 USD，$1.50 会在 300k token 上限前持续先触发，L 系降级沦为主路径，「降级不计成功」击穿 KPI（DR 6）。
+
+**两个修正（[OPEN-BUDGET]，维护者择一）**：
+- **方案 A（模型降档）**：opus 仅综合·终稿，初稿/审查改 synthesis 档 → 名义上限降至 $2.32，配 caching 后现实 ≈$0.5–0.7，$1.50 有安全裕度。
+- **方案 B（认可上限 + 定标验证）**：承认 $1.50 隐含 caching 假设，**列入 M4 定标显式验证项**——C2a 黄金集实测 deep 单次 p95 成本；常态 > $1.50 则回退方案 A 或上调档位。
+
+两方案共同前提：预算闸的 USD 判定用**实际 usage 分项计价**（含 cache_read/write，对齐 D8 调用前置检查），名义单价仅用于 token 上限、不用于 USD 闸。
 
 ### D7: 降级阶梯与触发条件
 
@@ -142,8 +165,8 @@ payload 类型（字段为最小集，定稿随 RFC-003 IR 冻结微调）：
 
 ### D8: 重试与故障计费
 
-- 单 LLM 调用重试（D2 tenacity，≤2 次退避）**计入阶段预算**——重试不免费，防预算旁路。
-- LLM 提供方故障 → Router 级换模型档（D2 降级链），trace 记录 `fallback_from`；换档后价格按实际模型计。
+- 单 LLM 调用重试（ROADMAP-D2 tenacity，≤2 次退避）**计入阶段预算**——重试不免费，防预算旁路。
+- LLM 提供方故障 → Router 级换模型档（ROADMAP-D2 降级链），trace 记录 `fallback_from`；换档后价格按实际模型计。
 - 预算检查是**调用前置**（输入实测 + max_tokens 预估 ≤ 剩余），不中途掐断已发出的调用。
 
 ---
@@ -154,14 +177,14 @@ payload 类型（字段为最小集，定稿随 RFC-003 IR 冻结微调）：
 
 `~/.bellwether/sessions/{session_id}/`：`manifest.json` + `events.jsonl`（append-only）+ `blobs/`（大 payload 按 sha256 内容寻址，重复上下文自然去重）。quick 与 deep **都全量录制**（E4 覆盖所有报告，非 deep 专属）。
 
-`manifest.json`：session_id、created_at、cli_command、tier、symbol、config_hash、code_version(包版本+git sha)、model_routing(各角色最终 ModelSpec)、prompt_versions(B9)、budget_config、trace_schema_version、data_snapshot_ids[]、status、totals{tokens_in/out, cost_usd, wall_ms}、degradations[]。
+`manifest.json`：session_id、created_at、cli_command、tier、symbol、config_hash、code_version(包版本+git sha)、`analysis_context`(as_of/capture_policy，RFC-000 §3)、model_routing(各角色最终 ModelSpec)、prompt_versions(B9，角色→版本 dict)、budget_config、trace_schema_version、`data_snapshot_refs[]`(RFC-000 §1)、status、totals{tokens_in/out, cost_usd, wall_ms}、degradations[]。
 
 `events.jsonl` 信封 `{seq, ts, type, stage, payload}`，type：
 
 | type | payload 关键字段 |
 |---|---|
-| llm_call | call_id, role, model, params, prompt_version, **request_blob**(完整请求序列化), **response_blob**, stop_reason, usage{in,out,cache_read/write}, cost_usd, latency_ms, attempt, fallback_from? |
-| tool_call | tool_use_id, name, input, output_blob, provider, as_of, snapshot_id?(RFC-002), cache_hit, latency_ms, error? |
+| llm_call | `llm_call_id`, role, model, params, prompt_version, **request_blob**(完整请求序列化), **response_blob**, stop_reason, usage{in,out,cache_read/write}, cost_usd, latency_ms, attempt, fallback_from? |
+| tool_call | `tool_call_id`(RFC-000 §6), name, input, output_blob, provider, as_of(来自 AnalysisContext), `snapshot_ref?`(RFC-000 §1), cache_hit, latency_ms, error? |
 | msg | §3 结构化消息信封全文 |
 | budget_event | kind(degrade/reserve/exceed), from_level, to_level, trigger, meter_snapshot |
 | stage_start/end | stage, budget_alloc / budget_spent |
@@ -195,7 +218,7 @@ payload 类型（字段为最小集，定稿随 RFC-003 IR 冻结微调）：
 **关键设计约束**：播种错误必须落在**确定性 verifier 够不到的残差错误空间**。数值抄错/单位错链在 B0 下是构造性防杀的——拿它们播种是在测一个免费组件已解决的问题，虚增审稿人价值。播种类别（与 Challenge.type 对齐）：
 ①语义错配（引用合法证据但期间/口径/主体错，如以 Q1 证据支撑「全年」论断）②逻辑跳跃（证据真实但不支撑结论）③选择性引用（忽略同源相反证据）④遗漏重大风险 ⑤定性无根据断言。
 
-**构造**：对黄金集 90 标的各生成一份 DraftIR，程序化+人工变异注入 2–6 个错误/稿（数量随机、审稿人不知情）；另置 20%（18 稿）**零错误对照稿**。种子池 60/40 切分为 dev/held-out，防对种子集过拟合（风险 #12）。
+**构造**：**先按标的/案例做 dev/held-out 切分（60/40），再在各子集内独立生成 DraftIR 与播种变异**——避免同一底稿的变体跨集合泄漏（Codex 9）。每稿程序化+人工变异注入 2–6 个错误（数量随机、审稿人不知情）；另置 20%（18 稿）**零错误对照稿**。防对种子集过拟合（风险 #12）。
 
 **指标与建议阈值**：
 - 检出率 **X ≥60%**（①类单独 ≥75%）。理由：人类同行评审对植入缺陷的检出率文献区间约 30–60%；播种错误是「已知类别、刻意构造」，比野生错误易检，故门槛取人类区间上沿——达不到 60% 的审稿人不值它的 token。①类更接近机械可查，单列高线。
@@ -213,17 +236,21 @@ payload 类型（字段为最小集，定稿随 RFC-003 IR 冻结微调）：
 - **Arm3** 全编排含对抗审查
 
 三臂而非两臂的理由：退出条件要求裁决「编排整体」与「审稿阶段」两个独立问题；两臂（Arm1 vs Arm3）测不出增益归属——若增益全来自多分析师，砍掉的应是审稿人而非整个 deep。3vs2 = 审稿边际价值（Goodhart 敏感指标主战场），2vs1 = 编排本身价值，3vs1 = 对外 headline。
-[OPEN-4] 三臂比两臂贵 50%；若预算收紧，退化方案是两臂（1 vs 3）+ 放弃归因，砍角色时只能整砍。需裁决。
+[OPEN-4]（已决三臂，DR+Codex 共识）预算收紧时的退化方案：两臂（1 vs 3）+ 放弃归因，砍角色时只能整砍——此退化触发与否随 [OPEN-BUDGET] 裁决。
 
 **三指标测量方法**：
 - **错误修正精度**：人工+verifier 审计 Arm2 报告中的真实错误（基数），核对 Arm3 对应报告修正比例；同时统计 Arm3 相对 Arm2 的**新增退化**（改坏的正确内容），净精度 = 修正 − 退化。主指标。
 - **无根据断言下降**：机械部分 = IR 中 evidence_ids 为空的定性 claim 计数（构造性可查）；语义部分 = LLM 评审判「引用不支撑断言」+ 人工抽检 20%（C6 一致性校准适用）。
 - **遗漏补回率**：按黄金集标注的每标的重大事项清单（冻结窗口内已知重大事实/风险），统计各臂覆盖比例。清单标注是新增人工工作量，计入 M4 估算。
-- 盲评协议：评审（人工 + ≥1 非 Anthropic LLM 评审，呼应 C5）看去溯源、随机顺序的成对报告。
+- 盲评协议：评审（人工 + **≥1 非 Anthropic LLM 评审，M4 即需**，呼应 C5 与 RFC-003 O6）看去溯源、随机顺序的成对报告；**裁决规则预注册**于 `B2-preregistration.md`，**对臂别盲化**（各臂报告去标识、随机呈现，裁决员不知来源臂）。
 
 **样本量与统计**：n=90 标的（全黄金集，保留分市场切片）× k=3 次重复取均值 × 3 臂 = **810 次 deep 级运行**；成本上界 810×$1.50=$1,215，实测预期 $600–900（caching + 通常低于上限），加评审与人工审计，**实验总预算 ≤$1,500**。paired 差值 bootstrap 95% CI（按标的重采样）；n=90、k=3 下最小可检测效应约 0.25–0.3 SD。预注册主指标 = 错误修正精度(3vs2)，其余为次要（Holm 校正）。
-[OPEN-5] 若 $1,500 超预算，备选 n=45（15/市场）×k=3，MDE 退到 ~0.4 SD 且丧失分市场功效。与 [OPEN-2][OPEN-4] 联动裁决。
-[OPEN-6] 误挑战/错误审计的人工裁决工作量估 2–4 人日（90 标的 × 数条挑战 + Arm2 错误审计），单人维护者是否自任裁决员（自我偏差）或引入外部评审，需裁决。
+[OPEN-5] 若 $1,500 超预算，备选 n=45（15/市场）×k=3，MDE 退到 ~0.4 SD 且丧失分市场功效。与 **[OPEN-BUDGET]**（含 B2 一次性封套）联动裁决。
+[OPEN-JUDGE] **裁决协议（两档并列，维护者裁决）**——两评审在此分歧（DR 支持档二、Codex 支持档一）：
+- **档一（Codex）**：维护者按预注册 rubric 初审 + **随机分层样本双评、所有分歧送独立复核**（维护者不得自选「争议样本」）。
+- **档二（DR）**：维护者自任裁决 + 仅争议样本外部复核。
+两档共同硬纪律：裁决规则先于数据锁定写入 `B2-preregistration.md`；对臂别盲化（见 D14 盲评协议）。
+**工作量（按 DR 13 修正）**：仅 Arm2 的 90 份错误基数审计已 ≈**3–4 人日**，叠加三臂挑战裁决总量偏大。**超量降级方案**：人工预算不足时对 Arm2 错误基数按市场分层抽样（每市场 30→15 标的）审计，MDE 相应放宽并在报告标注抽样率。
 
 ### D15: 退出条件（预注册，不得事后放宽）
 
@@ -239,7 +266,7 @@ payload 类型（字段为最小集，定稿随 RFC-003 IR 冻结微调）：
 
 ---
 
-## 7. 验收映射与实施切分（M4 内）
+## 7. 验收映射与实施切分（trace 地基 M1/M2 · 编排图 M4）
 
 | B1/B2 验收 | 本文机制 |
 |---|---|
@@ -247,22 +274,24 @@ payload 类型（字段为最小集，定稿随 RFC-003 IR 冻结微调）：
 | 预算超限优雅截断 | D7 预留原则 + L5 残报告渲染 + budget_event 留痕 |
 | B2 实验报告归档、扩张有数据依据 | D12–D15 预注册 + 退出条件表 |
 
-实施顺序（每步带验证）：
-1. StageRunner 抽取 + quick 包装 → paired 评测对拍 quick 行为不变；
-2. trace 录制器 + replay CLI → quick 会话回放 IR 级一致（此步同时交付 E4 最小版地基）；
-3. 图执行器 + 消息 schema + 预算执行器 → deep 全图跑通；故障注入演练 L1–L5 各触发一次；
-4. 实验一 harness 与种子池 → 闸门判定；
-5. 实验二 + 报告归档 → D15 裁决。
+实施顺序（每步带验证；里程碑对齐双评审阻断 DR 1 / Codex 7）：
+1. **【M1】** StageRunner 抽取 + quick 包装 → paired 评测对拍 quick 行为不变；
+2. **【M1/M2】** trace 录制器最小版（append-only events + capture 引用 + IR/report 哈希）+ `replay --verify`（quick 路径）→ quick 会话回放 IR 级一致（**同时交付 E4 最小版地基，解锁 M2 的 B0/C1 provenance 门禁演练**）；
+3. **【M4】** 图执行器 + 消息 schema + 预算执行器 + 降级事件 → deep 全图跑通；故障注入演练 L1–L5 各触发一次；
+4. **【M4】** 实验一 harness 与种子池 → 闸门判定；
+5. **【M4】** 实验二 + 报告归档 → D15 裁决。
 
 ---
 
 ## 8. [OPEN] 汇总
 
-| # | 问题 | 建议默认 |
+维护者裁决三类标记：**[OPEN-BUDGET]**（成本，联动 RFC-000 §7 单表）、**[OPEN-JUDGE]**（B2 裁决协议）。其余为设计内待定项。
+
+| # | 问题 | 状态 / 依据 |
 |---|---|---|
-| OPEN-1 | 事件分析师在 B6 未就绪时的首发形态（新闻直通不产 claim） | 接受降级首发 |
-| OPEN-2 | deep 单次成本硬上限取值（$1.00/$1.50/$2.00） | $1.50 |
-| OPEN-3 | 播种实验 X/Y 阈值（60%/20%）的最终锁定方式 | dev 集校准后锁 held-out |
-| OPEN-4 | 实验二三臂 vs 两臂（归因能力 vs 省 50% 成本） | 三臂 |
-| OPEN-5 | 实验二样本量 n=90 vs n=45（联动 OPEN-2/4） | n=90 |
-| OPEN-6 | 人工裁决员：维护者自任（有自我偏差）vs 外部评审 | 维护者 + 争议样本外部复核 |
+| OPEN-1 | 事件分析师在 B6 未就绪时的首发形态（新闻直通不产 claim） | 保留待定；建议默认接受降级首发（两评审未触及） |
+| **[OPEN-BUDGET]** | deep 单次上限 × 评测月度封套 × B2 一次性（三账联动） | RFC-000 §7 单表裁决；折算见 D6a；备选 $1.00/$2.00 |
+| OPEN-3 | 播种实验 X/Y 阈值（60%/20%）取值 | 锁定方式已定（D13：dev 集校准→held-out 终判）；具体取值 60/20 待 dev 实测后锁定 |
+| OPEN-4（已决） | 实验二三臂 vs 两臂 | **决策：三臂**（DR+Codex 共识；退出条件需拆「编排价值」与「审稿价值」两独立对比）；预算紧退化两臂见 D14 |
+| OPEN-5 | 实验二样本量 n=90 vs n=45 | 联动 **[OPEN-BUDGET]**；默认 n=90，退化 n=45（MDE→0.4 SD）见 D14 |
+| **[OPEN-JUDGE]** | B2 人工裁决协议（档一 Codex / 档二 DR，两档并列） | 见 D14；两评审分歧，待维护者择档 |

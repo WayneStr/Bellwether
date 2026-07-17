@@ -2,10 +2,10 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | **Draft**（M0 立项初稿，待评审） |
-| 日期 | 2026-07-16 |
+| 状态 | **Revised Draft v2（双评审后）· 2026-07-16** |
+| 共享契约 | 见 **RFC-000**（snapshot_ref / available_at / AnalysisContext / CoverageReport / price_basis 词表） |
 | 关联任务 | A0 · A1 · A3 · A4 · A5 · A7a · A9（M1–M3 实施；本 RFC 为 M0 立项） |
-| 关联文档 | ROADMAP §3 必答题 / §4 WS-A；docs/reviews/（Codex #7；deep-reasoner F2/F12/F13/F14） |
+| 关联文档 | ROADMAP §3 必答题 / §4 WS-A；docs/reviews/2026-07-16-rfc-review-{deep-reasoner,codex}（DR 2/4/5/8；Codex 1/5/10）；as-built = ADR-0003 + snapshot.py v3 |
 | 治理 | RFC 过评审后方可动代码（ROADMAP §8）；裁决后补录 ADR |
 
 ---
@@ -37,8 +37,8 @@
 | `first_seen_at`（必填） | **本系统**首次观测到该记录的时刻 | A0 快照=manifest.created_at；M3 摄取=ingest 时刻 |
 
 - 所有表 **append-only，禁止 UPDATE/DELETE**。同一有效时间键的数据变化（源修正、财报重述、拆股回溯重写）→ 插入新版本行（新 `first_seen_at`），旧行永存。
-- 查询语义两种：`latest`（每键取 `first_seen_at` 最新版）；`as_known_at(T)`（`coalesce(published_at, first_seen_at) <= T` 中取最新版）。财报重述由此自然建模：同一 period_end 多版本，T 时刻自动看到当时最新一版。
-- `first_seen_at` 是可得时间的**保守上界**（数据在被我观测时必然已可得）——晚估不早估，不会制造前视。
+- 查询语义两种：`latest`（每键取 `first_seen_at` 最新版）；`as_known_at(T)`（`available_at <= T` 中取最新版，`available_at` 按 **RFC-000 §2** 推导——**废除 `coalesce(published_at, first_seen_at)`**，它会让 observed 新闻按不可信源发布时间提前出现，Codex 阻断 1）。财报重述由此自然建模：同一 period_end 多版本，T 时刻自动看到当时最新一版。
+- `first_seen_at` 是 observed 源可得时间的**保守上界**（数据在被我观测时必然已可得）——晚估不早估，不会制造前视；故 RFC-000 §2 规定 observed 的 `available_at = first_seen_at`。
 
 ### D2 —— PIT 三级分类与判定规则
 
@@ -50,8 +50,8 @@
 | `observed` | 本系统有落盘观测证据（bronze manifest + sha256） | 「不晚于 first_seen_at 可得」 | A0 起每日快照的行情/基本面/新闻；M3 后增量摄取 |
 | `replay` | 两者皆无（一次性回填的历史序列） | 仅「历史回放」，**禁止用于零前视声明** | 回填 OHLCV 历史、yfinance 财务历史（无 filing 日期） |
 
-- 免费源新闻（yfinance news、东财新闻）自带发布时间但**源可改、不可核验** → 一律 `observed`，源时间存入 `published_at` 仅作参考；这正是 A0 每日观测「买不回来」的原因（deep-reasoner F2）。
-- 严格 PIT 查询模式（供 C2b/C4）：`as_known_at(T, strict=true)` 自动排除 `replay` 行。
+- 免费源新闻（yfinance news、东财新闻）自带发布时间但**源可改、不可核验** → 一律 `observed`，源时间存入 `published_at` 仅作参考、`available_at = first_seen_at`（RFC-000 §2）；**新闻与基本面观测是不可回填资产**，这正是 A0 每日观测「买不回来」的原因（DR 8c：**A股/港股公司行动可由公告回填、属 replay 级**，不在此紧迫性内）。
+- 严格 PIT 查询模式（供 C2b/C4）：`as_known_at(T, strict=true)` 以 `available_at` 为判据并自动排除 `replay` 行（RFC-000 §2）。
 - A1 协议 v2 的能力声明须含 `pit_support` 字段（provider 自报能否提供权威发布时间），存储层据此打 `pit_class`，不信任 provider 的自我声明超出该范围。
 
 ---
@@ -69,7 +69,7 @@
 
 **结论**：存储层只存两类事实——原始成交价（`bars_daily`）+ 公司行动事件（`corporate_actions`）。复权序列是事实的确定性函数（视图），按需现算。
 
-**现实口径修正（`price_basis`）**：Yahoo 免费源的 Close 本身是**拆股回溯调整值**（真未调整价不可得）；akshare `adjust=""` 是真原始价。行级字段 `price_basis ∈ {raw, split_adjusted}` 如实标注源口径；复权引擎按 basis 选因子集（split_adjusted 只需叠加分红因子）。源在拆股日重写历史 → D1 的版本化恰好把这次重写记录为新版本行，可检测、可审计。
+**现实口径修正（`price_basis`）**（DR 8，对齐 RFC-000 §1 词表）：Yahoo 免费源的 Close 是**拆股回溯调整值**（真未调整价不可得），US 事实层标 `split_adjusted_plus_action_columns`（携 dividends/splits 列）；akshare `adjust=""` 是真原始价，标 `unadjusted`。silver 事实表**只收事实口径**（`unadjusted` / `split_adjusted` / `split_adjusted_plus_action_columns`），视图口径（`qfq` / `split_and_dividend_adjusted`）只进对账区。复权引擎按 basis 选因子集（split_adjusted 只需叠加分红因子）。源在拆股日重写历史 → D1 版本化把该重写记录为新版本行，可检测、可审计。
 
 ### D4 —— 复权引擎边界（纯函数）
 
@@ -81,39 +81,54 @@ adjust(bars, actions, mode, anchor_date, price_basis) -> bars_adj   # 无 IO，�
 |---|---|---|---|
 | `none` | — | 存储原值、事实展示 | 默认 |
 | `hfq` | 首个交易日 | **回测收益/技术指标默认口径** | 因子只追加、历史不重写 |
-| `qfq` | **必须显式传 anchor_date**（缺省=查询 as_of 日） | 对照行情软件、用户展示 | 报告中 qfq 价必须标注 anchor，保证可复现 |
+| `qfq` | **anchor_date 必须来自 `AnalysisContext.as_of`**（RFC-000 §3；复权函数永不读系统钟，Codex 12） | 对照行情软件、用户展示 | 报告中 qfq 价必须标注 anchor，保证可复现 |
 
-- A股因子：除权参考价 =（前收盘 − 每股现金红利 + 配股价×配股比）/（1 + 送转比 + 配股比）；hfq 因子 = 前收盘 / 除权参考价，累乘。US/HK 为 split + dividend 因子（HK 另有供股，按配股同式）。对账 ground truth 见 [OPEN-2]。
-- 验证接口（喂 A4-L3）：用本引擎重算 `qfq(anchor=今日)` 与源 qfq 序列逐日对照，相对误差容差初设 ≤1e-3（除权日 ≤1e-2），实测后校准。
+- A股因子：除权参考价 =（前收盘 − 每股现金红利 + 配股价×配股比）/（1 + 送转比 + 配股比）；hfq 因子 = 前收盘 / 除权参考价，累乘。US/HK 为 split + dividend 因子（HK 另有供股，按配股同式）。对账 ground truth = **交易所公式自算**（OPEN-2 已决，东财 qfq 仅回归对拍参考）。
+- 验证接口（**复权正确性回归，非跨源对账**）：用本引擎重算 `qfq(anchor=context.as_of)`（RFC-000 §3）与源 qfq 序列逐日对照，相对误差容差初设 ≤1e-3（除权日 ≤1e-2），实测后校准。
 
-### D12 —— A0 行情快照改为 raw + actions 双抓（对 A0 的变更请求）
+### D12 —— A0 快照 = raw 事实层 + 复权视图双抓（**v3 as-built**）
 
-A0 若沿用 P0 取数路径（qfq / auto_adjust），每天积累的是「视图」而非「事实」。变更：
+> **as-built**：本节描述 `snapshot.py` **已落地的 v3 实现**（ADR-0003 + M0「A0 写入加固」提交），非变更请求。M3 导入器按此契约实现——**语义角色以 manifest 的 `price_basis` 为准、不看文件名**（DR 2 / Codex 5，防 qfq 灌入事实表）。
 
-- **必抓**：CN/HK `adjust=""`、US `auto_adjust=False`，另存 dividends/splits（US）与分红送配增量（CN，东财接口）→ `ohlcv.csv` + `actions.json`；
-- **加抓**：源 qfq 序列另存 `ohlcv_qfq.csv`，仅作 A4 复权对拍的免费对照样本，**永不进 silver 事实表**；
-- 快照 `manifest.json` 的 `schema_version` 升 `"2"`（加法演进，见 D6）。
-- 落地时机与 v1 已积累 qfq 快照的归类见 [OPEN-1]。**每晚一天生效，丢一天 raw 观测流**。
+每标的双抓两个文件：
+
+| 文件 | adjust | 语义角色 | price_basis（US ／ CN·HK） | 去向 |
+|---|---|---|---|---|
+| `ohlcv.csv` | default | **复权视图**（连续性展示） | `split_and_dividend_adjusted` ／ `qfq` | **对账区（quality 库）**，永不进 silver 事实表 |
+| `ohlcv_raw.csv` | raw | **事实层** | `split_adjusted_plus_action_columns` ／ `unadjusted` | **silver `bars_daily`** |
+
+- **US 事实层**携带 dividends / stock splits 列（`actions_captured=true`），即公司行动的第一批原始观测；因 Yahoo 已做拆股回溯，其 price_basis 如实标 `split_adjusted_plus_action_columns`（非真未调整价）。
+- **CN/HK 事实层**为真未复权价（`unadjusted`）但**暂无 actions**（`actions_captured=false`，manifest 记 `actions_note`：公告可回填、M3 补）；无独立 `ohlcv_qfq.csv`——CN/HK 的复权视图就是 `ohlcv.csv`（qfq），对账样本直接取对账区。
+- **写入不可变性**：run-id 目录 `{date}/{run_id}/` + 全部文件与 manifest 写完才落 `_COMPLETE` 原子标记（读取者只认含 `_COMPLETE` 的 run），同日多次运行不覆盖。`manifest.json` = **v3**（`schema_version=3`、`run_id`、`provider_versions`、`license_tag`、entry 级 `price_basis`/`actions_captured`）。
 
 ---
 
 ## 3. 必答三：A0 快照的 schema 迁移策略
 
-### A0 v1 布局（冻结为既成事实）
+### A0 快照布局（as-built，v1 → v3）
+
+**v3 现状**（导入器主目标形态）：
 
 ```
-~/.bellwether/snapshots/YYYY-MM-DD/
-  manifest.json                      # schema_version, created_at, provider 版本, 许可标签,
-                                     # files: {"AAPL/ohlcv.csv": "sha256:...", ...}
-  {SYMBOL}/ohlcv.csv · fundamentals.json · news.json
+~/.bellwether/snapshots/{YYYY-MM-DD}/{run_id}/
+  _COMPLETE                          # 原子完成标记：只认含它的 run
+  manifest.json                      # v3: schema_version=3, date, run_id, created_at, smoke,
+                                     #   provider_versions{yfinance,akshare}, license_tag,
+                                     #   entries{"US:AAPL": {market, files{ohlcv|ohlcv_raw|
+                                     #     fundamentals|news:{path,sha256,bytes,rows/count,adjust}},
+                                     #     errors{}, price_basis{ohlcv,ohlcv_raw}, actions_captured,
+                                     #     actions_note?}}, failures{}
+  {MARKET}/{SYMBOL}/ohlcv.csv · ohlcv_raw.csv · fundamentals.json · news.json
 ```
+
+- **版本差异**（导入器 per-version reader 各读一版，D6）：v1（`schema_version=1`，仅 2026-07-16 smoke）无 run_id 层、无 ohlcv_raw、manifest 无 provider_versions/license_tag/price_basis、files 平铺；v2（ADR-0003）加 ohlcv_raw 仍无 run_id 层；v3 = run_id 目录 + `_COMPLETE` + manifest v3 字段（Codex 5：manifest 为 entries/failures **嵌套**，非平铺）。
 
 ### D5 —— 快照 = 不可变 bronze 层；迁移 = 重放导入，永不「转换后弃原件」
 
 - 快照文件**永不改写/删除**（介质搬迁允许，须逐文件 sha256 校验）。
 - M3 的 DuckDB+Parquet 是**派生层**：`bw data import-snapshots` 按日期序重放 bronze → silver。任何未来 schema 演进（M3 之后亦然）都通过「升级重放器 + 重建派生层」完成——早期快照天然免疫演进，这是「活过 M3」的结构性保证，而非逐版本写转换脚本。
-- 导入语义：`first_seen_at = manifest.created_at`；`pit_class = observed`；行级 `snapshot_ref = "YYYY-MM-DD/{SYMBOL}/file#sha256"`，从任意 silver 行可回溯到原始快照文件（供 E4 溯源与 A3 验收抽检）。
-- v1 期间积累的 qfq 行情：导入对账区（quality 库）供 A4 对拍，不进事实表（联动 [OPEN-1]）。fundamentals.json / news.json 无此问题，全量转 `observed` 事实。
+- 导入语义：`first_seen_at = manifest.created_at`；`pit_class = observed`、`available_at = first_seen_at`（RFC-000 §2）；行级 `snapshot_ref = "{date}/{run_id}/{MARKET}/{SYMBOL}/{file}#{sha256}"`（**RFC-000 §1**，含 market 与 run-id；v1/v2 存量用 `run-legacy` 占位），从任意 silver 行可回溯原始快照文件（供 E4 溯源与 A3 验收抽检）。
+- **视图/事实分流**（DR 2 阻断收口）：`ohlcv.csv`（复权视图）→ 对账区（quality 库）供 A4 对拍；`ohlcv_raw.csv`（事实层）→ silver `bars_daily`——以 manifest `price_basis` 判角色，防 qfq 灌入事实表。fundamentals.json / news.json 全量转 `observed` 事实。
 
 ### D6 —— 版本化 reader 契约（向后兼容的机械保证)
 
@@ -161,12 +176,12 @@ gold    DuckDB 视图与宏（latest / as_known_at / 复权）  ← 分析与评
 `catalog.duckdb` 仅存视图/宏定义，可由 `bw data rebuild-catalog` 从 parquet 全量重建——消除 DuckDB 文件格式跨大版本锁定风险。核心宏：
 
 - `bars_latest(market, symbol)` —— 每 trade_date 取最新版本；
-- `bars_as_known(market, symbol, T, strict)` —— D1 语义；strict=true 排除 replay（供 C2b/C4）；
+- `bars_as_known(market, symbol, T, strict)` —— D1 语义，判据 `available_at`（RFC-000 §2）；strict=true 排除 replay（供 C2b/C4）；
 - `bars_adjusted(market, symbol, mode, anchor)` —— 调用 D4 复权引擎（Python 层实现，DuckDB UDF 或取回后计算，实施时定，不影响接口）。
 
 ### D9 —— 缓存降级为纯性能层
 
-silver 是唯一事实库（system of record）。现 `.cache/` 降级为：(a) 网络响应短 TTL 缓存（防重复请求，配合 A1 限流声明）；(b) 复权/指标 memoization（key 含 actions 集合哈希 → 公司行动更新自动失效）。**缓存可随时全删，不承担任何正确性职责**。取数顺序：silver 覆盖且新鲜 → 直接用；否则 provider 拉取。在线拉取是否 write-through 入库见 [OPEN-3]；M3 先做「A0 每日批量 + 显式 `bw data backfill`」两条入库通道。
+silver 是唯一事实库（system of record）。现 `.cache/` 降级为：(a) 网络响应短 TTL 缓存（防重复请求，配合 A1 限流声明）；(b) 复权/指标 memoization（key 含 actions 集合哈希 → 公司行动更新自动失效）。**缓存可随时全删，不承担任何正确性职责**。取数顺序：silver 覆盖且新鲜 → 直接用；否则 provider 拉取。在线拉取 **M3 不 write-through 入 silver**（OPEN-3 已决；Codex immutable bronze staging 记为未来形态）；M3 先做「A0 每日批量 + 显式 `bw data backfill`」两条入库通道。
 
 ---
 
@@ -180,14 +195,16 @@ silver 是唯一事实库（system of record）。现 `.cache/` 降级为：(a) 
 |---|---|---|
 | L1 结构 | schema/类型/非空/重复键 | **一票否决**，整批隔离 |
 | L2 单序列 | OHLC 不变式（low≤min(o,c)≤max(o,c)≤high, vol≥0）；对照 trading_calendar 的缺口；无解释跳变（\|Δclose\| 超阈且无对应 action / 涨跌停解释，CN 用 10%/20% 制度先验） | 计入质量分 |
-| L3 跨源 | 同 (symbol,date) 双源 close 相对差 > 容差；复权重算 vs 源 qfq 对照（D4） | 计入质量分 |
+| L3 跨源 | **M3 每市场仅一源 → 标 `not_assessed`，不计质量分**（Codex 10）。同源 qfq 对拍（复权重算 vs 源 qfq，D4）**不算跨源对账**，仅作复权正确性回归；真跨源验收移至第二源上线后 | not_assessed（第二源上线后启用） |
 | L4 时效 | as_of 落后交易日历的天数 | 计入质量分 |
 
-- **质量分** = 100 × Σ wᵢ·passᵢ（L2–L4 加权通过率）。初始权重：不变式 .30 / 缺口 .25 / 跳变 .20 / 对账 .15 / 时效 .10；判定：<70 隔离、70–85 degraded、≥85 ok。权重与阈值 [OPEN-6]，M3 注入脏数据实测后校准（对应 A4 验收）。
-- **隔离语义**：整批进 `quarantine/`（原样保留 + reason.json），不入 silver；告警复用 A0 live-smoke 通道。人工放行后保留原 `first_seen_at` 并记 `released_at`；严格 PIT 查询以 `max(first_seen_at, released_at)` 为可用时间——隔离期内该数据对系统「不存在」，防止「事后放行」变相前视。
+- **质量分** = 100 × Σ wᵢ·passᵢ（加权通过率）。初始权重：不变式 .30 / 缺口 .25 / 跳变 .20 / 对账 .15 / 时效 .10；**M3（第二源上线前）L3 not_assessed → 对账 .15 权重置 0 后剩余四项归一化**（不变式 .353 / 缺口 .294 / 跳变 .235 / 时效 .118）；判定：<70 隔离、70–85 degraded、≥85 ok。权重与阈值 [OPEN-6]，M3 注入脏数据实测后校准（对应 A4 验收）。
+- **隔离语义**：整批进 `quarantine/`（原样保留 + reason.json），不入 silver；告警复用 A0 live-smoke 通道。人工放行后保留原 `first_seen_at` 并记 `released_at`；严格 PIT 查询以 `available_at = max(first_seen_at, released_at)` 为可用时间（RFC-000 §2 隔离放行规则）——隔离期内该数据对系统「不存在」，防止「事后放行」变相前视。
 - **已入库数据发现问题**：不 UPDATE——追加更正版本行 + `superseded` 标记表（append-only 侧表），latest 视图自动跳过被标记版本。
 
 ### D11 —— 覆盖矩阵：静态能力层 + 运行时层，构造性静默
+
+> 下述 `CoverageReport` 结构（status ∈ available/degraded/missing + as_of/quality_score/reason）为 **RFC-000 §5 全线统一词表**——RFC-003 原 `CoverageEntry`（ok/partial/missing）已废除并对齐至此。
 
 - **静态层**：来自 A1 能力声明的 市场 × 数据类型 × PIT 支持 矩阵（provider 自报，TCK 抽验）。
 - **运行时层**：每次分析产出结构化对象，随数据包传编排层、写入报告元数据：
@@ -220,15 +237,17 @@ CoverageReport{ market, symbol, as_of,
 | D9 | 缓存降级 | silver 为唯一事实库；缓存全删无损正确性 |
 | D10 | 质量门 | L1 一票否决；质量分加权；隔离批次 + released_at 语义 |
 | D11 | 覆盖矩阵 | 静态+运行时两层；missing 维度构造性静默 |
-| D12 | A0 双抓变更 | raw+actions 必抓；qfq 降为对账样本；schema_version→2 |
+| D12 | A0 双抓（v3 as-built） | ohlcv_raw 事实层→silver / ohlcv 视图→对账区；US 带 actions，CN/HK 待 M3；schema_version=3 |
 
 ## 7. [OPEN] 汇总
 
-| # | 问题 | 影响 |
+> OPEN-1/2/3 已被双评审共识 + as-built 解决，转为决策（下方「已决」行，依据标注）；OPEN-4–7 保留待定。本 RFC 无 [OPEN-BUDGET]/[OPEN-JUDGE]/[OPEN-STORAGE] 类维护者裁决项（cassette 存放归 RFC-003 [OPEN-STORAGE]）。
+
+| # | 问题 | 影响 / 决策 |
 |---|---|---|
-| OPEN-1 | **D12 的生效时机与 v1 qfq 快照归类**（立即改 A0？v1 积累的 qfq 序列进对账区还是弃用？） | 日历时间压力：每晚一天丢一天 raw 观测流；影响迁移器范围 |
-| OPEN-2 | **A股复权对账的 ground truth**：以东财 qfq 对拍（算法未公开文档化）还是按交易所公式自算为准、东财仅作参考？ | 决定 A4「复权正确性」验收怎么判 |
-| OPEN-3 | **在线分析取数是否 write-through 入 silver**（M3 先批量入库；在线路径入库会带来写放大与并发复杂度，但获知时间轴更细） | 影响 A1 协议与存储的耦合度、M3 范围 |
+| OPEN-1（已决） | D12 生效时机与 v1 qfq 快照归类 | **已实施为 v3 as-built**（ADR-0003 + M0 加固）：raw 事实层 + 复权视图双抓落地；v1/v2 存量 qfq 归对账区不进事实表。依据：两评审共识 + 已落地代码 |
+| OPEN-2（已决） | A股复权对账 ground truth | **决策：以交易所披露的公司行动 + 公开公式自算为规范**，东财 qfq 仅作回归对拍参考；超容差 → 告警人工裁（**DR+Codex 共识**：东财算法无文档、会漂移，不可作 ground truth）。定 A4「复权正确性」验收 |
+| OPEN-3（已决） | 在线分析取数是否 write-through 入 silver | **决策：M3 不做在线 write-through**（DR 支持默认；在线溯源已由 trace blob 闭环）。Codex 的 immutable bronze staging（在线路径先写不可变 bronze 暂存、批量校验后入 silver）记为**「未来若做的既定形态」**，M3 不实施 |
 | OPEN-4 | fundamentals_snapshot 用宽列还是 MAP 列（指标集随源演进） | 查询便利性 vs 演进成本 |
 | OPEN-5 | news_id 去重键（url 可缺失/变化；标题相似度去重是否入 M3） | 新闻重复率与 C2b 语料质量 |
 | OPEN-6 | 质量分权重与隔离阈值（待 M3 脏数据实测校准） | A4 验收数值 |
@@ -238,12 +257,12 @@ CoverageReport{ market, symbol, as_of,
 
 | 阶段 | 本 RFC 范围内动作 |
 |---|---|
-| M0（RFC 批准后立即） | D12：A0 双抓变更 + manifest schema_version=2（小时级改动，抢日历时间） |
-| M1 | A1 能力声明加 `pit_support`/`rate_limit`/`price_basis`；E3 裁决 license_tag 词表（bronze/silver 全程默认本地 `~/.bellwether/`，不入公开渠道） |
-| M2 | 无 A3 依赖（C2a cassette 独立）；与 RFC-003 对齐 `source_id`/`snapshot_ref` 命名（B0 IR 的证据指针） |
-| M3 | silver/gold 全量落地；`import-snapshots` 迁入 A0 + C2a；A4 质量门；A5 主表/日历；A7a filings+blob；A9 覆盖矩阵 + HK 基本面 |
+| M0（已完成） | D12 已落地为 **v3 as-built**（run-id 目录 + `_COMPLETE` + manifest v3；ADR-0003 + M0 加固提交）——抢日历时间目标达成 |
+| M1（契约冻结） | A1 能力声明加 `pit_support`/`rate_limit`/`price_basis`；**与 RFC-000 对齐 `snapshot_ref`（含 market+run-id）/`available_at`/`AnalysisContext` 并随 IR 于 M1 冻结**（DR 5：对齐提前到 M1）；E3 裁决 license_tag 词表（bronze/silver 全程默认本地 `~/.bellwether/`，不入公开渠道） |
+| M2 | 无 A3 依赖（C2a cassette 独立）；规范化序列化定序/定精度（RFC-000 §8）保快照哈希稳定 |
+| M3 | silver/gold 全量落地；`import-snapshots` 迁入 A0 + C2a；A4 质量门（L3 not_assessed 至第二源上线）；A5 主表/日历；A7a filings+blob；A9 覆盖矩阵 + HK 基本面；C2b 按 `as_known_at` 喂评测的适配器归 RFC-003 |
 
-ROADMAP 验收 → 机制映射：**抽检零前视** = as_known_at 宏 + pit_class 强制 + append-only（D1/D2）；**复权重算与源一致** = D4 对拍进 A4-L3；**A0 早期快照完整迁移** = D5 重放导入 + D6 CI fixture + 全量哈希校验报告。
+ROADMAP 验收 → 机制映射：**抽检零前视** = as_known_at 宏（`available_at` 判据，RFC-000 §2）+ pit_class 强制 + append-only（D1/D2）；**复权重算与源一致** = D4 对拍进 A4-L3（同源回归；跨源验收待第二源）；**A0 早期快照完整迁移** = D5 重放导入 + D6 CI fixture + 全量哈希校验报告。
 
 ## 9. 风险
 
