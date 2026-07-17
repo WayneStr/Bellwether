@@ -234,7 +234,7 @@ zero_tolerance 维度无豁免通道；waiver 仅对推理质量开放且留痕�
 - **降档起步方案（建议默认）**：nightly → **每周 2–3 次** + 非 release 层 **n_judge=1** → ≈**$0.9–1.5k/月**；O7 实测后升档。
 - deep 单价 $0.80 是 M4 前假设；若 M4 定标逼近 $1.50（RFC-001 D6a），release 层月估上浮。
 
-金额均标 [OPEN-BUDGET]，与 RFC-001 的 [OPEN-BUDGET] **同表联动裁决**。
+金额均标 [OPEN-BUDGET]（已裁决，见 ADR-0004），与 RFC-001 的 [OPEN-BUDGET]（已裁决，见 ADR-0004） **同表联动裁决**。
 
 ### 5.3 C2a 冻结 cassette 的录制与存放
 
@@ -242,7 +242,7 @@ zero_tolerance 维度无豁免通道；waiver 仅对推理质量开放且留痕�
 - **格式**：键 =（provider, method, canonical_args）；**canonical_args 的时间区间来自 `AnalysisContext.as_of`（RFC-000 §3），录制/重放同一逻辑时钟，杜绝 `datetime.now()` 漂移致重放 miss（Codex 3）**。值 = 原始返回 + captured_at + license_tag + SHA-256（规范化序列化见 RFC-000 §8）。每标的一个 json.gz（行情类 parquet 于 M3 并轨）。
 - **manifest（可入公开仓库）**：cassette_version、recorded_at、逐条目哈希清单、provider 版本、E3 许可结论引用——**不含任何原始数据值**，外界可验证完整性而无法重建数据。
 - **重放**：`CassetteProvider` 实现同一 provider 接口，严格模式——未命中键即报错，禁止网络 fallback（保证 A 层字节级冻结）。
-- **存放（本地加密为主，[OPEN-STORAGE] 待 E3 书面结论）**：(a) **本地目录 + 加密**为主存储，原始 cassette 不入公开仓库、**不用 git LFS**；(b) 公开仓库只放 **manifest 哈希 + recorder 脚本**，外部贡献者本地自录（分数标注「非官方 cassette，不可直接对比」）；(c) 仅派生指标 → 喂不出原始事实，**不单独用**。**CI 边界**：fork PR 拿不到 secrets → **PR 层评测只在维护者机器/自托管 runner 跑**，公开 CI 仅跑 **B 层守门员测试**（播种违规样本，不需原始数据）。**远端加密备份是否允许以 E3（M1）书面结论为准** [OPEN-STORAGE]。
+- **存放（本地加密为主，[OPEN-STORAGE]（已裁决，见 ADR-0004） 待 E3 书面结论）** ← 已采纳（ADR-0004）：(a) **本地目录 + 加密**为主存储，原始 cassette 不入公开仓库、**不用 git LFS**；(b) 公开仓库只放 **manifest 哈希 + recorder 脚本**，外部贡献者本地自录（分数标注「非官方 cassette，不可直接对比」）；(c) 仅派生指标 → 喂不出原始事实，**不单独用**。**CI 边界**：fork PR 拿不到 secrets → **PR 层评测只在维护者机器/自托管 runner 跑**，公开 CI 仅跑 **B 层守门员测试**（播种违规样本，不需原始数据）。**远端加密备份是否允许以 E3（M1）书面结论为准** [OPEN-STORAGE]（已裁决，见 ADR-0004）。
 - **与 A0 的关系**（RFC-000 §9 分界）：A0 = 每日增量积累（喂 C2b）；C2a = 一次性录制、版本化冻结；两者共享值序列化 / sha256 / license_tag 惯例但**不合并**（用途不同）。M3 迁入 A3 存储时 manifest 哈希不变，迁移可验证。
 - **C2b silver 适配器（归属本 RFC，DR 14）**：M3 提供「从 silver 按 `as_known_at(T, strict)` 喂评测」的 CassetteProvider 兼容适配器，对接 RFC-002 gold 宏与 RFC-000 §2 available_at；C2b 多时点集由此生成。
 
@@ -264,21 +264,21 @@ zero_tolerance 维度无豁免通道；waiver 仅对推理质量开放且留痕�
 | D7 | paired null 门禁 | 废除 W=t·s；同配置重复构 null，case 聚类 bootstrap 判 mean(d) 配对退化；三层只变样本量/置信边界（Codex 阻断 4） |
 | D8 | 地板配置化 | `eval/gates.yaml` 声明式；zero_tolerance 无豁免，reasoning 可带签字豁免并月报 |
 | D9 | 三层评测 | PR 固定 20（6 层分层+2）/ nightly 半量轮换 / release 全量 ×n_gen=5 |
-| D10 | cassette 边界与存放 | 录在 provider 边界、严格重放；本地加密存放 + 公开 manifest 哈希 + recorder；PR 评测限维护者/自托管 runner（[OPEN-STORAGE]） |
+| D10 | cassette 边界与存放 | 录在 provider 边界、严格重放；本地加密存放 + 公开 manifest 哈希 + recorder；PR 评测限维护者/自托管 runner（[OPEN-STORAGE]（已裁决，见 ADR-0004）） |
 
 ## 8. [OPEN] 汇总
 
-维护者裁决三类标记：**[OPEN-BUDGET]**（成本，联动 RFC-000 §7）、**[OPEN-STORAGE]**（cassette 远端备份，依赖 E3）。O1/O6 已被两评审共识解决转为决策，其余为设计内待定项。
+维护者裁决三类标记：**[OPEN-BUDGET]**（已裁决，见 ADR-0004）（成本，联动 RFC-000 §7）、**[OPEN-STORAGE]**（已裁决，见 ADR-0004）（cassette 远端备份，依赖 E3）。O1/O6 已被两评审共识解决转为决策，其余为设计内待定项。
 
 | # | 问题 | 依赖/建议 |
 |---|------|-----------|
 | O1（已决方式） | 裸数字白名单边界与中文数量词处理 | **方式已定**（Codex+DR 共识）：token/语法扫描器 + 中文数量词纳入检测或明文声明残差 + 每类正反例守门员单测；具体白名单待 M2 真实报告实测误杀率锁定 |
-| **[OPEN-BUDGET]** | 评测月度封套 + n_gen/n_judge/nightly 频率档 | 降档起步 ≈$0.9–1.5k/月、满档 ≈$2.4k/月；RFC-000 §7 单表联动裁决（含 deep 单价、B2 一次性） |
-| **[OPEN-STORAGE]** | cassette 远端加密备份是否允许 | 本地加密为主已定；**远端备份依 E3（M1）书面结论**；PR 层评测限维护者/自托管 runner |
+| **[OPEN-BUDGET]**（已裁决，见 ADR-0004） | 评测月度封套 + n_gen/n_judge/nightly 频率档 | 降档起步 ≈$0.9–1.5k/月、满档 ≈$2.4k/月；RFC-000 §7 单表联动裁决（含 deep 单价、B2 一次性） |
+| **[OPEN-STORAGE]**（已裁决，见 ADR-0004） | cassette 远端加密备份是否允许 | 本地加密为主已定；**远端备份依 E3（M1）书面结论**；PR 层评测限维护者/自托管 runner |
 | O4 | PR 固定 20 例名单是否季度轮换 30% | 防黄金集过拟合（风险 #12）vs paired 可比性与缓存命中的张力 |
 | O5 | 完整性维度地板数值 | 建议 ≥0.95 起，按报告类型清单实测后定 |
 | O6（已决） | 非 Anthropic 评审模型引入时点 | **决策：M4**（与 RFC-001 D14 统一，B2 盲评即需；C5 公开基准前必须在位） |
-| O7 | 成本单价与 token 量假设 | M2 实测校准；[OPEN-BUDGET] 裁决依赖此 |
+| O7 | 成本单价与 token 量假设 | M2 实测校准；[OPEN-BUDGET]（已裁决，见 ADR-0004） 裁决依赖此 |
 | O8 | 假设类 derive（DCF 情景改参）机制 | 随 B3 估值引擎设计；需解决「LLM 填参 = 潜在绕过口」 |
 
 ---
