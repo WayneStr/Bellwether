@@ -12,6 +12,8 @@
     <array>
         <string>/Users/YOUR_USERNAME/.bellwether/venv/bin/bellwether</string>
         <string>snapshot</string>
+        <string>--delay</string>
+        <string>1.5</string>
     </array>
     <key>WorkingDirectory</key>
     <string>/Users/YOUR_USERNAME/.bellwether</string>

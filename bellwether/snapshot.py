@@ -74,8 +74,20 @@ def _provider_versions() -> dict[str, str | None]:
     return versions
 
 
-def snapshot_symbol(symbol: str, market: str, run_dir: Path, *, lookback_days: int = LOOKBACK_DAYS) -> dict:
-    """抓取单标的三类数据落盘。返回 manifest 条目；单项失败记 errors 不抛出。"""
+def snapshot_symbol(
+    symbol: str,
+    market: str,
+    run_dir: Path,
+    *,
+    lookback_days: int = LOOKBACK_DAYS,
+    intra_delay: float = 0.0,
+) -> dict:
+    """抓取单标的三类数据落盘。返回 manifest 条目；单项失败记 errors 不抛出。
+
+    intra_delay：同一标的相邻两次抓取之间的间歇。东财 K 线端点对
+    「view+raw 背靠背两连击 × 快速轮标的」的突发模式会 RemoteDisconnected
+    （2026-07-17 首次全量实测），标的间 delay 之外还需要标的内间歇。
+    """
     entry: dict = {
         "market": market,
         "files": {},
@@ -101,6 +113,8 @@ def snapshot_symbol(symbol: str, market: str, run_dir: Path, *, lookback_days: i
     except Exception as exc:
         entry["errors"]["ohlcv"] = str(exc)
 
+    if intra_delay > 0:
+        time.sleep(intra_delay)
     try:
         # 事实层：不复权原始价（复权视图会因未来分红/送转全序列重写，只有 raw 不可重写）
         df_raw = provider.get_ohlcv(sym, start, end, adjust="raw")
@@ -169,7 +183,7 @@ def run_snapshot(
 
     for market, syms in universe.items():
         for symbol in syms:
-            entry = snapshot_symbol(symbol, market, run_dir)
+            entry = snapshot_symbol(symbol, market, run_dir, intra_delay=min(delay, 0.6))
             key = f"{market}:{symbol}"
             manifest["entries"][key] = entry
             if entry["errors"]:
