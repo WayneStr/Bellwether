@@ -65,6 +65,23 @@ def _normalize_hist(df: pd.DataFrame) -> pd.DataFrame:
     return df.dropna(subset=["open", "high", "low", "close"])
 
 
+def _load_cn_sina(ak, code: str, start: date, end: date, ak_adjust: str) -> pd.DataFrame:
+    """A股 新浪日线兜底（东财 push2his 间歇不可达时降级）：英文列，需 sh/sz 前缀。"""
+    prefix = "sh" if code.startswith("6") else "sz"
+    df = ak.stock_zh_a_daily(
+        symbol=f"{prefix}{code}",
+        start_date=start.strftime("%Y%m%d"),
+        end_date=end.strftime("%Y%m%d"),
+        adjust=ak_adjust,
+    )
+    if df is None or df.empty:
+        raise ValueError("数据源返回空行情")
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.set_index("date").reindex(columns=_OHLCV_COLS)
+    return df.dropna(subset=["open", "high", "low", "close"])
+
+
 def _fetch_em_news(ak, code: str, limit: int) -> list[NewsItem]:
     """东财个股新闻（A股/港股通用），解析为 NewsItem 列表。"""
     try:
@@ -119,15 +136,23 @@ class AkshareCNProvider(MarketDataProvider):
         ak_adjust = "" if adjust == "raw" else "qfq"  # ""=不复权原始价（A0 事实层）
 
         def _load() -> pd.DataFrame:
-            return _normalize_hist(
-                ak.stock_zh_a_hist(
-                    symbol=code,
-                    period="daily",
-                    start_date=start.strftime("%Y%m%d"),
-                    end_date=end.strftime("%Y%m%d"),
-                    adjust=ak_adjust,
+            try:
+                return _normalize_hist(
+                    ak.stock_zh_a_hist(
+                        symbol=code,
+                        period="daily",
+                        start_date=start.strftime("%Y%m%d"),
+                        end_date=end.strftime("%Y%m%d"),
+                        adjust=ak_adjust,
+                    )
                 )
-            )
+            except Exception as em_err:
+                try:
+                    return _load_cn_sina(ak, code, start, end, ak_adjust)
+                except Exception as sina_err:
+                    raise ValueError(
+                        f"东财与新浪均失败：em={em_err}; sina={sina_err}"
+                    ) from sina_err
 
         return cached_dataframe(key, DEFAULT_TTL_DAYS, _load)
 

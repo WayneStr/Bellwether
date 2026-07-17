@@ -42,6 +42,92 @@ def test_akshare_cn_ohlcv_parsing(monkeypatch):
     assert len(df) == 3
 
 
+def test_cn_kline_falls_back_to_sina(monkeypatch):
+    akshare = pytest.importorskip("akshare")
+
+    def fake_hist(**kwargs):
+        raise ConnectionError("push2his.eastmoney.com 不可达")
+
+    calls = {}
+
+    def fake_daily(**kwargs):
+        calls["symbol"] = kwargs.get("symbol")
+        return pd.DataFrame(
+            {
+                "date": ["2026-01-02", "2026-01-03", "2026-01-06"],
+                "open": [1700.0, 1710.0, 1720.0],
+                "high": [1715.0, 1725.0, 1735.0],
+                "low": [1695.0, 1705.0, 1715.0],
+                "close": [1710.0, 1720.0, 1730.0],
+                "volume": [1000.0, 1100.0, 1200.0],
+                "amount": [1.0, 2.0, 3.0],  # 多余列应被丢弃
+            }
+        )
+
+    monkeypatch.setattr(akshare, "stock_zh_a_hist", fake_hist)
+    monkeypatch.setattr(akshare, "stock_zh_a_daily", fake_daily)
+    monkeypatch.setattr(
+        "bellwether.data.akshare_provider.cached_dataframe",
+        lambda key, ttl, loader: loader(),
+    )
+
+    df = AkshareCNProvider().get_ohlcv("600519", date(2026, 1, 1), date(2026, 1, 7))
+    assert list(df.columns) == ["open", "high", "low", "close", "volume"]
+    assert len(df) == 3
+    assert df["close"].iloc[-1] == 1730.0
+    assert calls["symbol"] == "sh600519"
+
+
+def test_cn_sina_prefix(monkeypatch):
+    from bellwether.data.akshare_provider import _load_cn_sina
+
+    calls = []
+
+    class FakeAk:
+        def stock_zh_a_daily(self, **kwargs):
+            calls.append(kwargs["symbol"])
+            return pd.DataFrame(
+                {
+                    "date": ["2026-01-02"],
+                    "open": [1.0],
+                    "high": [1.0],
+                    "low": [1.0],
+                    "close": [1.0],
+                    "volume": [1.0],
+                }
+            )
+
+    ak = FakeAk()
+    _load_cn_sina(ak, "000001", date(2026, 1, 1), date(2026, 1, 7), "qfq")
+    _load_cn_sina(ak, "300750", date(2026, 1, 1), date(2026, 1, 7), "qfq")
+    _load_cn_sina(ak, "600036", date(2026, 1, 1), date(2026, 1, 7), "qfq")
+
+    assert calls == ["sz000001", "sz300750", "sh600036"]
+
+
+def test_cn_both_sources_fail(monkeypatch):
+    akshare = pytest.importorskip("akshare")
+
+    def fake_hist(**kwargs):
+        raise ConnectionError("em 挂了")
+
+    def fake_daily(**kwargs):
+        raise ConnectionError("sina 也挂了")
+
+    monkeypatch.setattr(akshare, "stock_zh_a_hist", fake_hist)
+    monkeypatch.setattr(akshare, "stock_zh_a_daily", fake_daily)
+    monkeypatch.setattr(
+        "bellwether.data.akshare_provider.cached_dataframe",
+        lambda key, ttl, loader: loader(),
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        AkshareCNProvider().get_ohlcv("600519", date(2026, 1, 1), date(2026, 1, 7))
+    msg = str(exc_info.value)
+    assert "em 挂了" in msg
+    assert "sina 也挂了" in msg
+
+
 def test_akshare_hk_ohlcv_parsing(monkeypatch):
     akshare = pytest.importorskip("akshare")
 
