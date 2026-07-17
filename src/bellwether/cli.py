@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -25,11 +23,11 @@ console = Console()
 def analyze(
     symbol: str = typer.Argument(..., help="股票代码，如 AAPL"),
     deep: bool = typer.Option(False, "--deep", help="生成深度报告（走 deep_report 角色模型）"),
-    model: Optional[str] = typer.Option(None, "--model", help="覆盖本次使用的模型 id"),
-    temperature: Optional[float] = typer.Option(None, "--temperature", help="覆盖采样温度"),
-    max_tokens: Optional[int] = typer.Option(None, "--max-tokens", help="覆盖最大输出 tokens"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="把报告导出为 markdown 文件"),
-    config_path: Optional[str] = typer.Option(None, "--config", help="指定 config.toml 路径"),
+    model: str | None = typer.Option(None, "--model", help="覆盖本次使用的模型 id"),
+    temperature: float | None = typer.Option(None, "--temperature", help="覆盖采样温度"),
+    max_tokens: int | None = typer.Option(None, "--max-tokens", help="覆盖最大输出 tokens"),
+    output: str | None = typer.Option(None, "--output", "-o", help="把报告导出为 markdown 文件"),
+    config_path: str | None = typer.Option(None, "--config", help="指定 config.toml 路径"),
 ) -> None:
     """分析单只股票。"""
     config = load_config(config_path)
@@ -49,9 +47,7 @@ def analyze(
         overrides["max_tokens"] = max_tokens
 
     with console.status(f"正在分析 {symbol} ……"):
-        verdict = Orchestrator(config).analyze(
-            symbol, deep=deep, model_override=model, **overrides
-        )
+        verdict = Orchestrator(config).analyze(symbol, deep=deep, model_override=model, **overrides)
 
     render_analysis(symbol, verdict, show_disclaimer=config.report.disclaimer)
     if output:
@@ -63,7 +59,7 @@ def analyze(
 
 @config_app.command("show")
 def config_show(
-    config_path: Optional[str] = typer.Option(None, "--config", help="指定 config.toml 路径"),
+    config_path: str | None = typer.Option(None, "--config", help="指定 config.toml 路径"),
 ) -> None:
     """显示当前生效的模型配置（用于验证「模型可配置」是否按预期解析）。"""
     config = load_config(config_path)
@@ -76,9 +72,7 @@ def config_show(
     table.add_column("max_tokens", justify="right")
     for role in VALID_ROLES:
         spec = router.resolve(role)
-        table.add_row(
-            role, spec.model, str(spec.params.temperature), str(spec.params.max_tokens)
-        )
+        table.add_row(role, spec.model, str(spec.params.temperature), str(spec.params.max_tokens))
     console.print(table)
 
     key_state = "已设置" if config.anthropic_api_key else "[red]未设置[/red]"
@@ -90,7 +84,7 @@ def config_show(
 
 @app.command()
 def models(
-    config_path: Optional[str] = typer.Option(None, "--config", help="指定 config.toml 路径"),
+    config_path: str | None = typer.Option(None, "--config", help="指定 config.toml 路径"),
 ) -> None:
     """列出当前 API 地址下可用的模型 id（便于挑选填入 config.toml 或 --model）。"""
     config = load_config(config_path)
@@ -113,12 +107,14 @@ def models(
         resp.raise_for_status()
         payload = resp.json()
     except httpx.HTTPStatusError as exc:
-        console.print(f"[red]查询失败[/red]（HTTP {exc.response.status_code}）：{exc.response.text[:300]}")
-        raise typer.Exit(code=1)
+        console.print(
+            f"[red]查询失败[/red]（HTTP {exc.response.status_code}）：{exc.response.text[:300]}"
+        )
+        raise typer.Exit(code=1) from exc
     except Exception as exc:
         console.print(f"[red]请求出错[/red]：{exc}")
         console.print("[dim]该中转可能未实现 /v1/models，可直接向服务商询问可用模型名。[/dim]")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from exc
 
     data = payload.get("data", []) if isinstance(payload, dict) else []
     if not data:
@@ -134,16 +130,20 @@ def models(
         else:
             table.add_row(str(item), "")
     console.print(table)
-    console.print("[dim]把需要的 id 填进 config.toml 的 [models].<role>，或运行时用 --model 覆盖。[/dim]")
+    console.print(
+        "[dim]把需要的 id 填进 config.toml 的 [models].<role>，或运行时用 --model 覆盖。[/dim]"
+    )
 
 
 @app.command()
 def snapshot(
-    root: Optional[str] = typer.Option(None, "--root", help="快照根目录（默认 ~/.bellwether/snapshots）"),
-    markets: Optional[str] = typer.Option(None, "--markets", help="逗号分隔市场过滤，如 US,HK"),
+    root: str | None = typer.Option(
+        None, "--root", help="快照根目录（默认 ~/.bellwether/snapshots）"
+    ),
+    markets: str | None = typer.Option(None, "--markets", help="逗号分隔市场过滤，如 US,HK"),
     smoke: bool = typer.Option(False, "--smoke", help="冒烟模式：每市场只抓前 3 只"),
     delay: float = typer.Option(0.7, "--delay", help="标的间隔秒数（礼貌限流）"),
-    golden: Optional[str] = typer.Option(None, "--golden", help="自定义黄金集 toml 路径"),
+    golden: str | None = typer.Option(None, "--golden", help="自定义黄金集 toml 路径"),
 ) -> None:
     """A0 每日原始快照：黄金集行情/基本面/新闻落盘 + manifest（不调用 LLM，不需要 API key）。"""
     from .snapshot import exit_code_for, run_snapshot
@@ -160,7 +160,7 @@ def snapshot(
     table.add_column("成功", justify="right")
     table.add_column("失败", justify="right")
     per_market: dict[str, list[int]] = {}
-    for key, entry in manifest["entries"].items():
+    for _key, entry in manifest["entries"].items():
         m = entry["market"]
         ok_fail = per_market.setdefault(m, [0, 0])
         ok_fail[1 if entry["errors"] else 0] += 1
@@ -176,9 +176,9 @@ def snapshot(
 
 @app.command()
 def portfolio(
-    symbols: list[str] = typer.Argument(..., help="多只股票代码，如 AAPL MSFT 600519"),
+    symbols: list[str] = typer.Argument(..., help="多只股票代码，如 AAPL MSFT 600519"),  # noqa: B008
     period: str = typer.Option("1y", "--period", help="回溯区间，如 6mo / 1y"),
-    config_path: Optional[str] = typer.Option(None, "--config", help="指定 config.toml 路径"),
+    config_path: str | None = typer.Option(None, "--config", help="指定 config.toml 路径"),
 ) -> None:
     """多只股票的组合/风险分析（相关性/波动率/回撤/集中度，确定性指标，不经 LLM）。"""
     config = load_config(config_path)

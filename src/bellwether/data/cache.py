@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 import pandas as pd
 
@@ -22,9 +22,7 @@ def _key_to_path(key: str) -> Path:
     return CACHE_DIR / f"{digest}.pkl"
 
 
-def cached_dataframe(
-    key: str, ttl_days: int, loader: Callable[[], pd.DataFrame]
-) -> pd.DataFrame:
+def cached_dataframe(key: str, ttl_days: int, loader: Callable[[], pd.DataFrame]) -> pd.DataFrame:
     """命中且未过期则返回缓存，否则调用 loader 取数并写缓存。
 
     缓存读写失败一律降级为直接取数，绝不影响主流程。

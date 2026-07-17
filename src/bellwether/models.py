@@ -137,9 +137,9 @@ class TechnicalReport(BaseModel):
     symbol: str
     period: str
     last_close: float
-    data_asof: str                       # 最后一根 K 线日期
+    data_asof: str  # 最后一根 K 线日期
     indicators: dict[str, float | None]  # 最新指标快照 {"RSI14": 62.3, "MACD": ...}
-    signals: list[str]                   # 确定性规则识别的中性状态描述，非买卖指令
+    signals: list[str]  # 确定性规则识别的中性状态描述，非买卖指令
     fetched_at: datetime
     source: str
 
@@ -149,10 +149,10 @@ class FundamentalReport(BaseModel):
 
     symbol: str
     name: str | None = None
-    metrics: dict[str, float | None]     # PE/PB/PEG/PS/EPS/ROE/毛利率/市值
-    dcf_fair_value: float | None         # 简版 DCF 每股内在价值
-    dcf_assumptions: dict[str, float]    # DCF 假设，透明可审
-    dcf_note: str | None = None          # 数据缺失/口径说明
+    metrics: dict[str, float | None]  # PE/PB/PEG/PS/EPS/ROE/毛利率/市值
+    dcf_fair_value: float | None  # 简版 DCF 每股内在价值
+    dcf_assumptions: dict[str, float]  # DCF 假设，透明可审
+    dcf_note: str | None = None  # 数据缺失/口径说明
     fetched_at: datetime
     source: str
 
@@ -161,12 +161,12 @@ class PortfolioReport(BaseModel):
     """组合/风险分析的结构化输出（确定性指标）。"""
 
     symbols: list[str]
-    weights: dict[str, float]                     # 各标的权重（归一化）
+    weights: dict[str, float]  # 各标的权重（归一化）
     period: str
-    common_days: int                              # 参与计算的共同交易日数
-    correlation: dict[str, dict[str, float]]      # 相关性矩阵
-    annualized_volatility: float | None           # 组合年化波动率(%)
-    annualized_returns: dict[str, float | None]   # 各标的年化收益(%)
-    max_drawdowns: dict[str, float | None]        # 各标的最大回撤(%)
-    concentration_hhi: float                      # 赫芬达尔集中度指数
+    common_days: int  # 参与计算的共同交易日数
+    correlation: dict[str, dict[str, float]]  # 相关性矩阵
+    annualized_volatility: float | None  # 组合年化波动率(%)
+    annualized_returns: dict[str, float | None]  # 各标的年化收益(%)
+    max_drawdowns: dict[str, float | None]  # 各标的最大回撤(%)
+    concentration_hhi: float  # 赫芬达尔集中度指数
     fetched_at: datetime

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pandas as pd
 import yfinance as yf
@@ -40,7 +40,8 @@ class YFinanceProvider(MarketDataProvider):
             )
             df = df.rename(columns=str.lower)
             if raw_mode:
-                keep = [c for c in ("open", "high", "low", "close", "volume", "dividends", "stock splits") if c in df.columns]
+                raw_cols = ("open", "high", "low", "close", "volume", "dividends", "stock splits")
+                keep = [c for c in raw_cols if c in df.columns]
                 df = df[keep]
             else:
                 df = df.reindex(columns=_OHLCV_COLS)
@@ -72,7 +73,7 @@ class YFinanceProvider(MarketDataProvider):
             peg=info.get("trailingPegRatio") or info.get("pegRatio"),
             ps=info.get("priceToSalesTrailing12Months"),
             gross_margins=info.get("grossMargins"),
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=datetime.now(UTC),
             source=self.source,
         )
 
@@ -93,9 +94,11 @@ class YFinanceProvider(MarketDataProvider):
             published = None
             ts = entry.get("providerPublishTime")
             if ts:
-                published = datetime.fromtimestamp(ts, tz=timezone.utc)
+                published = datetime.fromtimestamp(ts, tz=UTC)
             items.append(
-                NewsItem(title=title, url=url, published_at=published, summary=content.get("summary"))
+                NewsItem(
+                    title=title, url=url, published_at=published, summary=content.get("summary")
+                )
             )
         return items
 

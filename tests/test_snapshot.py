@@ -1,7 +1,7 @@
 """A0 快照任务单测（假 provider，不打网）。"""
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -29,9 +29,7 @@ class _FakeProvider:
         )
 
     def get_fundamentals(self, symbol):
-        return FundamentalData(
-            symbol=symbol, fetched_at=datetime.now(timezone.utc), source="fake"
-        )
+        return FundamentalData(symbol=symbol, fetched_at=datetime.now(UTC), source="fake")
 
     def get_news(self, symbol, limit=20):
         return [NewsItem(title="t1"), NewsItem(title="t2")]
@@ -40,9 +38,7 @@ class _FakeProvider:
 @pytest.fixture
 def golden_file(tmp_path):
     p = tmp_path / "golden.toml"
-    p.write_text(
-        '[symbols]\nUS = ["AAA", "BBB"]\nCN = ["600000"]\n', encoding="utf-8"
-    )
+    p.write_text('[symbols]\nUS = ["AAA", "BBB"]\nCN = ["600000"]\n', encoding="utf-8")
     return p
 
 
@@ -112,12 +108,8 @@ def test_run_snapshot_writes_files_and_manifest(tmp_path, monkeypatch, golden_fi
 
 def test_run_snapshot_isolates_runs_on_same_day(tmp_path, monkeypatch, golden_file):
     _patch_provider(monkeypatch, _FakeProvider())
-    m1 = run_snapshot(
-        tmp_path / "snaps", golden_path=golden_file, delay=0, date_str="2026-07-16"
-    )
-    m2 = run_snapshot(
-        tmp_path / "snaps", golden_path=golden_file, delay=0, date_str="2026-07-16"
-    )
+    m1 = run_snapshot(tmp_path / "snaps", golden_path=golden_file, delay=0, date_str="2026-07-16")
+    m2 = run_snapshot(tmp_path / "snaps", golden_path=golden_file, delay=0, date_str="2026-07-16")
     day = tmp_path / "snaps" / "2026-07-16"
     run_dirs = {p.name for p in day.glob("run-*")}
     assert m1["run_id"] != m2["run_id"]  # 同日多次运行互不覆盖
@@ -140,12 +132,8 @@ def test_run_snapshot_records_failures_without_aborting(tmp_path, monkeypatch, g
 def test_market_filter_and_smoke(tmp_path, monkeypatch):
     _patch_provider(monkeypatch, _FakeProvider())
     big = tmp_path / "big.toml"
-    big.write_text(
-        '[symbols]\nUS = ["A1","A2","A3","A4","A5"]\nCN = ["C1"]\n', encoding="utf-8"
-    )
-    manifest = run_snapshot(
-        tmp_path / "s", golden_path=big, markets=["US"], smoke=True, delay=0
-    )
+    big.write_text('[symbols]\nUS = ["A1","A2","A3","A4","A5"]\nCN = ["C1"]\n', encoding="utf-8")
+    manifest = run_snapshot(tmp_path / "s", golden_path=big, markets=["US"], smoke=True, delay=0)
     keys = list(manifest["entries"])
     assert keys == ["US:A1", "US:A2", "US:A3"]  # 只有 US、且 smoke 截前 3
 

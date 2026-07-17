@@ -7,7 +7,7 @@ akshare 为可选依赖（仅分析 A股/港股时需要）：延迟 import，�
 from __future__ import annotations
 
 import os
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pandas as pd
 
@@ -175,7 +175,7 @@ class AkshareCNProvider(MarketDataProvider):
             pe=pe,
             pb=pb,
             ps=ps,
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=datetime.now(UTC),
             source=self.source,
         )
 
@@ -230,7 +230,7 @@ class AkshareHKProvider(MarketDataProvider):
         return FundamentalData(
             symbol=symbol,
             currency="HKD",
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=datetime.now(UTC),
             source=self.source,
         )
 

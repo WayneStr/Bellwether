@@ -5,8 +5,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Callable
+from collections.abc import Callable
+from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
@@ -30,7 +30,7 @@ class PortfolioModule:
         if len(symbols) < 2:
             raise ValueError("组合分析至少需要 2 只标的")
 
-        end = datetime.now(timezone.utc).date()
+        end = datetime.now(UTC).date()
         start = period_to_start(period, end)
 
         closes: dict[str, pd.Series] = {}
@@ -81,5 +81,5 @@ class PortfolioModule:
             annualized_returns=ann_ret,
             max_drawdowns=max_dd,
             concentration_hhi=round(float(np.sum(w_vec**2)), 4),
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=datetime.now(UTC),
         )

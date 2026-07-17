@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 
@@ -23,31 +23,46 @@ _FUND = FundamentalModule()
 TOOL_SCHEMAS = [
     {
         "name": "get_price_history",
-        "description": "获取某股票在给定区间的历史 K 线（OHLCV）摘要，含最近若干日与区间收益。返回客观数据，不含结论。",
+        "description": (
+            "获取某股票在给定区间的历史 K 线（OHLCV）摘要，含最近若干日与区间收益。"
+            "返回客观数据，不含结论。"
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "symbol": {"type": "string", "description": "股票代码，如 AAPL"},
-                "period": {"type": "string", "description": "回溯区间，如 1mo / 6mo / 1y，默认 6mo"},
+                "period": {
+                    "type": "string",
+                    "description": "回溯区间，如 1mo / 6mo / 1y，默认 6mo",
+                },
             },
             "required": ["symbol"],
         },
     },
     {
         "name": "get_technical_analysis",
-        "description": "计算某股票的技术指标（MA20/MA50、RSI14、MACD、布林带）并给出中性的量价状态描述。返回客观数据，不含买卖建议。",
+        "description": (
+            "计算某股票的技术指标（MA20/MA50、RSI14、MACD、布林带）"
+            "并给出中性的量价状态描述。返回客观数据，不含买卖建议。"
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "symbol": {"type": "string", "description": "股票代码，如 AAPL"},
-                "period": {"type": "string", "description": "回溯区间，如 3mo / 6mo / 1y，默认 6mo"},
+                "period": {
+                    "type": "string",
+                    "description": "回溯区间，如 3mo / 6mo / 1y，默认 6mo",
+                },
             },
             "required": ["symbol"],
         },
     },
     {
         "name": "get_fundamentals",
-        "description": "获取某股票的基本面分析：估值指标（PE/PB/PEG/PS/ROE/毛利率/市值）+ 简版 DCF 内在价值估算（含透明假设）。返回客观数据，不含买卖建议。",
+        "description": (
+            "获取某股票的基本面分析：估值指标（PE/PB/PEG/PS/ROE/毛利率/市值）+"
+            " 简版 DCF 内在价值估算（含透明假设）。返回客观数据，不含买卖建议。"
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -58,7 +73,9 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "compare_peers",
-        "description": "对比主标的与若干同行的估值/盈利指标（PE/PB/ROE/市值）。同行代码由你依据行业知识提供。",
+        "description": (
+            "对比主标的与若干同行的估值/盈利指标（PE/PB/ROE/市值）。同行代码由你依据行业知识提供。"
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -74,7 +91,10 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_news",
-        "description": "获取某股票近期新闻（标题/时间/摘要），用于识别催化剂与风险事件。返回客观新闻列表，不含结论。",
+        "description": (
+            "获取某股票近期新闻（标题/时间/摘要），用于识别催化剂与风险事件。"
+            "返回客观新闻列表，不含结论。"
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -109,7 +129,7 @@ def execute_tool(name: str, tool_input: dict, provider: MarketDataProvider) -> s
 def _get_price_history(tool_input: dict, provider: MarketDataProvider) -> str:
     symbol = provider.resolve_symbol(tool_input["symbol"])
     period = tool_input.get("period", "6mo")
-    end = datetime.now(timezone.utc).date()
+    end = datetime.now(UTC).date()
     start = period_to_start(period, end)
     df = provider.get_ohlcv(symbol, start, end)
     return _summarize_ohlcv(df, symbol, "1d", provider.source).model_dump_json()
@@ -188,6 +208,6 @@ def _summarize_ohlcv(
         last_close=last_close,
         period_return_pct=ret,
         recent_bars=bars,
-        fetched_at=datetime.now(timezone.utc),
+        fetched_at=datetime.now(UTC),
         source=source,
     )

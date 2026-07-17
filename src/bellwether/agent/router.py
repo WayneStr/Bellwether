@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from ..models import ModelConfig, ModelSpec
 
 VALID_ROLES = ("parse", "synthesis", "deep_report")
@@ -16,7 +18,7 @@ class ModelRouter:
     def __init__(self, config: ModelConfig):
         self._config = config
 
-    def resolve(self, role: str, *, model: str | None = None, **param_overrides) -> ModelSpec:
+    def resolve(self, role: str, *, model: str | None = None, **param_overrides: Any) -> ModelSpec:
         """返回某角色最终生效的模型规格。
 
         role: parse / synthesis / deep_report

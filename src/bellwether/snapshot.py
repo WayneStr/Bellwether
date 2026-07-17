@@ -16,8 +16,9 @@ import random
 import secrets
 import time
 import tomllib
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from .data.base import ProviderRegistry
 
@@ -47,7 +48,7 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _file_meta(path: Path, run_dir: Path, **extra) -> dict:
+def _file_meta(path: Path, run_dir: Path, **extra: Any) -> dict:
     return {
         "path": str(path.relative_to(run_dir)),
         "sha256": _sha256(path),
@@ -59,7 +60,10 @@ def _file_meta(path: Path, run_dir: Path, **extra) -> dict:
 def _price_basis(market: str) -> dict[str, str]:
     """按市场返回视图口径（ohlcv）与事实口径（ohlcv_raw）标注。"""
     if market == "US":
-        return {"ohlcv": "split_and_dividend_adjusted", "ohlcv_raw": "split_adjusted_plus_action_columns"}
+        return {
+            "ohlcv": "split_and_dividend_adjusted",
+            "ohlcv_raw": "split_adjusted_plus_action_columns",
+        }
     return {"ohlcv": "qfq", "ohlcv_raw": "unadjusted"}
 
 
@@ -96,13 +100,15 @@ def snapshot_symbol(
         "actions_captured": market == "US",
     }
     if market != "US":
-        entry["actions_note"] = "corporate actions backfillable from exchange announcements; deferred to M3"
+        entry["actions_note"] = (
+            "corporate actions backfillable from exchange announcements; deferred to M3"
+        )
     out_dir = run_dir / market / symbol
     out_dir.mkdir(parents=True, exist_ok=True)
 
     provider = ProviderRegistry.for_market(market)
     sym = provider.resolve_symbol(symbol)
-    end = datetime.now(timezone.utc).date()
+    end = datetime.now(UTC).date()
     start = end - timedelta(days=lookback_days)
 
     try:
@@ -164,8 +170,8 @@ def run_snapshot(
     if smoke:
         universe = {m: syms[:SMOKE_PER_MARKET] for m, syms in universe.items()}
 
-    day = date_str or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    run_id = f"run-{datetime.now(timezone.utc).strftime('%H%M%S')}-{secrets.token_hex(2)}"
+    day = date_str or datetime.now(UTC).strftime("%Y-%m-%d")
+    run_id = f"run-{datetime.now(UTC).strftime('%H%M%S')}-{secrets.token_hex(2)}"
     run_dir = root_dir / day / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -173,7 +179,7 @@ def run_snapshot(
         "schema_version": SCHEMA_VERSION,
         "date": day,
         "run_id": run_id,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "smoke": smoke,
         "provider_versions": _provider_versions(),
         "license_tag": LICENSE_TAG,
@@ -196,7 +202,8 @@ def run_snapshot(
     (run_dir / manifest_name).write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    (run_dir / "_COMPLETE").touch()  # 原子完成标记：全部文件+manifest 写完才落此空文件，读取者只认含它的 run
+    # 原子完成标记：全部文件+manifest 写完才落此空文件，读取者只认含它的 run
+    (run_dir / "_COMPLETE").touch()
     if not smoke:
         total, failed = len(manifest["entries"]), len(manifest["failures"])
         (root_dir / "last_status.json").write_text(  # 告警面：机器可读的最近一次全量状态
@@ -205,7 +212,7 @@ def run_snapshot(
                     "date": day,
                     "run_id": run_id,
                     "run_path": str(run_dir.relative_to(root_dir)),
-                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                    "finished_at": datetime.now(UTC).isoformat(),
                     "total": total,
                     "failed": failed,
                     "ok": failed == 0,

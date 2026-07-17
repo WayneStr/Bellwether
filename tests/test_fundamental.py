@@ -1,6 +1,6 @@
 """FundamentalModule.compute 的单测：比率单位转换 + DCF 触发（假 provider，不打网）。"""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from bellwether.analysis.fundamental import FundamentalModule
 from bellwether.models import FundamentalData
@@ -12,12 +12,12 @@ class _FakeProvider:
     def get_fundamentals(self, symbol):
         return FundamentalData(
             symbol=symbol,
-            roe=0.14,             # 小数比率 → 应转成 14.0
-            gross_margins=0.48,   # → 48.0
+            roe=0.14,  # 小数比率 → 应转成 14.0
+            gross_margins=0.48,  # → 48.0
             pe=30.0,
             free_cashflow=100.0,
             shares_outstanding=100.0,
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=datetime.now(UTC),
             source="fake",
         )
 

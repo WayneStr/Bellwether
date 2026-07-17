@@ -1,5 +1,7 @@
 """report.export_markdown 单测（写临时文件，不打网）。"""
 
+from datetime import UTC
+
 from bellwether.report import export_markdown
 
 
@@ -22,7 +24,7 @@ def test_export_markdown_without_disclaimer(tmp_path):
 
 def test_render_portfolio_runs():
     """渲染不应抛异常（rich 表格 smoke）。"""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from bellwether.models import PortfolioReport
     from bellwether.report import render_portfolio
@@ -37,6 +39,6 @@ def test_render_portfolio_runs():
         annualized_returns={"A": 10.0, "B": 5.0},
         max_drawdowns={"A": -15.0, "B": -20.0},
         concentration_hhi=0.5,
-        fetched_at=datetime.now(timezone.utc),
+        fetched_at=datetime.now(UTC),
     )
     render_portfolio(report, show_disclaimer=False)

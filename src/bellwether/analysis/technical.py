@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 
@@ -24,7 +24,7 @@ class TechnicalModule:
     def compute(
         self, symbol: str, provider: MarketDataProvider, period: str = "6mo"
     ) -> TechnicalReport:
-        end = datetime.now(timezone.utc).date()
+        end = datetime.now(UTC).date()
         start = period_to_start(period, end)
         df = provider.get_ohlcv(symbol, start, end)
         close = df["close"]
@@ -53,7 +53,7 @@ class TechnicalModule:
             data_asof=str(df.index[-1].date()),
             indicators=snapshot,
             signals=self._describe(last_close, snapshot, macd_hist),
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=datetime.now(UTC),
             source=getattr(provider, "source", "unknown"),
         )
 
@@ -66,7 +66,9 @@ class TechnicalModule:
         if ma20 is not None:
             out.append(f"收盘价位于 MA20（{ma20}）{'上方' if last_close >= ma20 else '下方'}")
         if ma20 is not None and ma50 is not None:
-            out.append("均线呈" + ("多头排列（MA20>MA50）" if ma20 > ma50 else "空头排列（MA20<MA50）"))
+            out.append(
+                "均线呈" + ("多头排列（MA20>MA50）" if ma20 > ma50 else "空头排列（MA20<MA50）")
+            )
 
         rsi = snap["RSI14"]
         if rsi is not None:

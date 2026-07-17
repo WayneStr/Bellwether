@@ -21,9 +21,7 @@ def test_dcf_manual_value():
     pv_flows = sum(100 / (1 + disc) ** t for t in range(1, 6))
     pv_terminal = (100 / disc) / (1 + disc) ** 5
     expected = (pv_flows + pv_terminal) / 100  # net_debt=0, shares=100
-    v = simple_dcf(
-        100.0, 100.0, growth_rate=0.0, discount_rate=0.10, terminal_growth=0.0, years=5
-    )
+    v = simple_dcf(100.0, 100.0, growth_rate=0.0, discount_rate=0.10, terminal_growth=0.0, years=5)
     assert v is not None and math.isclose(v, expected, rel_tol=1e-9)
 
 

@@ -43,7 +43,9 @@ def test_portfolio_custom_weights_and_drawdown():
     providers = {"A": _fake_provider(a), "B": _fake_provider(b)}
 
     r = PortfolioModule().compute(
-        ["A", "B"], period="3mo", weights={"A": 3, "B": 1},
+        ["A", "B"],
+        period="3mo",
+        weights={"A": 3, "B": 1},
         provider_for=lambda s: providers[s.upper()],
     )
     assert r.weights == {"A": 0.75, "B": 0.25}  # 3:1 归一化

@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ..data.base import MarketDataProvider
 from ..models import FundamentalReport
@@ -50,6 +50,6 @@ class FundamentalModule:
             dcf_fair_value=round(fair, 2) if fair is not None else None,
             dcf_assumptions=dict(DEFAULT_DCF),
             dcf_note=note,
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=datetime.now(UTC),
             source=d.source,
         )

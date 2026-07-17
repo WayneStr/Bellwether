@@ -1,7 +1,7 @@
 """get_news tool 单测（假 provider，不打网）。"""
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from bellwether.agent.tools import execute_tool
 from bellwether.models import NewsItem
@@ -18,7 +18,7 @@ class _FakeProvider:
             NewsItem(
                 title="财报超预期",
                 url="http://x",
-                published_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+                published_at=datetime(2026, 7, 1, tzinfo=UTC),
                 summary="Q2 营收增长",
             ),
             NewsItem(title="监管调查", url=None, published_at=None, summary=None),

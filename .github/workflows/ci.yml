@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: ruff check
+        run: uv run ruff check src tests
+
+      - name: mypy
+        run: uv run mypy src
+
+      - name: pytest
+        # 覆盖率门槛 65：M1-D1 落地时实测 ~67%（详见 scripts/ci-local.sh 注释），
+        # 待 M1 后段补测例再提到 85。
+        run: uv run pytest --cov=bellwether --cov-fail-under=65
