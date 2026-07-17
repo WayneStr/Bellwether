@@ -33,7 +33,7 @@ snapshot_ref = "{YYYY-MM-DD}/{run_id}/{MARKET}/{SYMBOL}/{file}#{sha256}"
 | `available_at` | 可用时间（**由 §2 规则推导，禁止自由写入**） |
 | `pit_class` | `authoritative` / `observed` / `replay`（RFC-002 D2） |
 | `price_basis` | 行情类必填。capture 级词表（v3 as-built）：`unadjusted` / `split_adjusted` / `split_adjusted_plus_action_columns` / `qfq` / `split_and_dividend_adjusted`；silver 行级仅允许事实口径前三者，视图口径只进对账区 |
-| `license_tag` | 许可标签（E3 词表；未裁决前占位 `private-do-not-redistribute (pending E3 audit)`） |
+| `license_tag` | 许可标签（E3 词表已裁决，见 docs/data-licensing.md §4 / ADR-0005；黄金集/cassette = `private-ok-backup-ok`） |
 
 ## 2. available_at：前视安全的可用时间（Codex 阻断 1）
 
@@ -104,7 +104,7 @@ cassette 值与快照文件在计算 sha256 前必须经规范化序列化，否
 
 ## 9. C2a cassette 与 A0 快照：共享约定与分界（DR 14）
 
-**共享三件**：(a) 值的规范化序列化（§8）；(b) sha256/manifest 惯例——逐条目哈希清单 + 版本号 + `_COMPLETE` 式原子完成标记；(c) `license_tag` 词表（E3 裁决，未决前用 §1 占位标签）。
+**共享三件**：(a) 值的规范化序列化（§8）；(b) sha256/manifest 惯例——逐条目哈希清单 + 版本号 + `_COMPLETE` 式原子完成标记；(c) `license_tag` 词表（E3 已裁决，见 data-licensing.md §4 / ADR-0005）。
 
 **为何不合并**：用途不同。cassette = 按 `(provider, method, canonical_args)` 键**精确重放**的一次性冻结输入（评测确定性，键空间由调用参数定义）；A0 快照 = **全窗日增**的观测流（时间物理资产，喂 C2b/C4，布局由日历与标的定义）。合并会把 cassette 键空间绑死在快照目录布局上，两边演进互相掣肘。
 

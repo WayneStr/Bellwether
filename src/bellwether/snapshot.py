@@ -29,7 +29,7 @@ SCHEMA_VERSION = 3
 DEFAULT_ROOT = Path.home() / ".bellwether" / "snapshots"
 LOOKBACK_DAYS = 400
 SMOKE_PER_MARKET = 3
-LICENSE_TAG = "private-do-not-redistribute (pending E3 audit)"
+LICENSE_TAG = "private-ok-backup-ok"  # E3 审计结论（ADR-0005）：本地私存 + 加密个人云备份均可
 
 
 def load_golden_set(path: str | Path | None = None) -> dict[str, list[str]]:

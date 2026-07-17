@@ -82,7 +82,7 @@ def test_run_snapshot_writes_files_and_manifest(tmp_path, monkeypatch, golden_fi
 
     # manifest 顶层元数据
     assert manifest["run_id"] == run_dir.name
-    assert manifest["license_tag"] == "private-do-not-redistribute (pending E3 audit)"
+    assert manifest["license_tag"] == "private-ok-backup-ok"
     assert "yfinance" in manifest["provider_versions"]
     assert "akshare" in manifest["provider_versions"]
 
