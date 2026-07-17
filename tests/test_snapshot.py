@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -65,11 +66,16 @@ def test_run_snapshot_writes_files_and_manifest(tmp_path, monkeypatch, golden_fi
         tmp_path / "snaps", golden_path=golden_file, delay=0, date_str="2026-07-16"
     )
     day = tmp_path / "snaps" / "2026-07-16"
-    assert (day / "US" / "AAA" / "ohlcv.csv").exists()
-    assert (day / "US" / "AAA" / "ohlcv_raw.csv").exists()  # 事实层双抓（ADR-0003）
-    assert (day / "US" / "AAA" / "fundamentals.json").exists()
-    assert (day / "US" / "AAA" / "news.json").exists()
-    assert (day / "manifest.json").exists()
+    run_dirs = list(day.glob("run-*"))
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
+    assert run_dir.name == manifest["run_id"]
+    assert (run_dir / "US" / "AAA" / "ohlcv.csv").exists()
+    assert (run_dir / "US" / "AAA" / "ohlcv_raw.csv").exists()  # 事实层双抓（ADR-0003）
+    assert (run_dir / "US" / "AAA" / "fundamentals.json").exists()
+    assert (run_dir / "US" / "AAA" / "news.json").exists()
+    assert (run_dir / "manifest.json").exists()
+    assert (run_dir / "_COMPLETE").exists()  # 原子完成标记
     assert (tmp_path / "snaps" / "last_status.json").exists()
 
     entry = manifest["entries"]["US:AAA"]
@@ -78,8 +84,47 @@ def test_run_snapshot_writes_files_and_manifest(tmp_path, monkeypatch, golden_fi
     assert not manifest["failures"]
     assert exit_code_for(manifest) == 0
 
+    # manifest 顶层元数据
+    assert manifest["run_id"] == run_dir.name
+    assert manifest["license_tag"] == "private-do-not-redistribute (pending E3 audit)"
+    assert "yfinance" in manifest["provider_versions"]
+    assert "akshare" in manifest["provider_versions"]
+
+    # entry 语义字段：US 为复权视图 + 事实层含公司行动列
+    assert entry["price_basis"] == {
+        "ohlcv": "split_and_dividend_adjusted",
+        "ohlcv_raw": "split_adjusted_plus_action_columns",
+    }
+    assert entry["actions_captured"] is True
+    assert "actions_note" not in entry
+
+    # CN 为 qfq 视图 + 不复权事实层，公司行动尚未抓取
+    cn_entry = manifest["entries"]["CN:600000"]
+    assert cn_entry["price_basis"] == {"ohlcv": "qfq", "ohlcv_raw": "unadjusted"}
+    assert cn_entry["actions_captured"] is False
+    assert "actions_note" in cn_entry
+
     status = json.loads((tmp_path / "snaps" / "last_status.json").read_text())
     assert status["ok"] is True and status["total"] == 3
+    assert status["run_id"] == manifest["run_id"]
+    assert status["run_path"] == str(Path("2026-07-16") / run_dir.name)
+
+
+def test_run_snapshot_isolates_runs_on_same_day(tmp_path, monkeypatch, golden_file):
+    _patch_provider(monkeypatch, _FakeProvider())
+    m1 = run_snapshot(
+        tmp_path / "snaps", golden_path=golden_file, delay=0, date_str="2026-07-16"
+    )
+    m2 = run_snapshot(
+        tmp_path / "snaps", golden_path=golden_file, delay=0, date_str="2026-07-16"
+    )
+    day = tmp_path / "snaps" / "2026-07-16"
+    run_dirs = {p.name for p in day.glob("run-*")}
+    assert m1["run_id"] != m2["run_id"]  # 同日多次运行互不覆盖
+    assert run_dirs == {m1["run_id"], m2["run_id"]}
+    for run_id in run_dirs:
+        assert (day / run_id / "_COMPLETE").exists()
+        assert (day / run_id / "US" / "AAA" / "ohlcv.csv").exists()
 
 
 def test_run_snapshot_records_failures_without_aborting(tmp_path, monkeypatch, golden_file):
@@ -105,7 +150,7 @@ def test_market_filter_and_smoke(tmp_path, monkeypatch):
     assert keys == ["US:A1", "US:A2", "US:A3"]  # 只有 US、且 smoke 截前 3
 
     # smoke 写独立 manifest，且不得触碰全量告警面 last_status.json
-    day_dirs = list((tmp_path / "s").glob("*/manifest-smoke.json"))
+    day_dirs = list((tmp_path / "s").glob("*/run-*/manifest-smoke.json"))
     assert len(day_dirs) == 1
     assert not (tmp_path / "s" / "last_status.json").exists()
 

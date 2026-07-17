@@ -10,8 +10,10 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import random
+import secrets
 import time
 import tomllib
 from datetime import datetime, timedelta, timezone
@@ -19,10 +21,14 @@ from pathlib import Path
 
 from .data.base import ProviderRegistry
 
-SCHEMA_VERSION = 2  # v2: 新增 ohlcv_raw（不复权事实层，RFC-002 D12/ADR-0003）；演进策略见 RFC-002
+# v3: run-id 不可变目录（{root}/{date}/run-<HHMMSS>-<4位hex>/，同日多次运行不覆盖，
+#     写完后落 _COMPLETE 原子完成标记）+ manifest/entry 元数据补齐
+#     （run_id/provider_versions/license_tag/price_basis/actions_captured）
+SCHEMA_VERSION = 3
 DEFAULT_ROOT = Path.home() / ".bellwether" / "snapshots"
 LOOKBACK_DAYS = 400
 SMOKE_PER_MARKET = 3
+LICENSE_TAG = "private-do-not-redistribute (pending E3 audit)"
 
 
 def load_golden_set(path: str | Path | None = None) -> dict[str, list[str]]:
@@ -41,19 +47,45 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _file_meta(path: Path, day_dir: Path, **extra) -> dict:
+def _file_meta(path: Path, run_dir: Path, **extra) -> dict:
     return {
-        "path": str(path.relative_to(day_dir)),
+        "path": str(path.relative_to(run_dir)),
         "sha256": _sha256(path),
         "bytes": path.stat().st_size,
         **extra,
     }
 
 
-def snapshot_symbol(symbol: str, market: str, day_dir: Path, *, lookback_days: int = LOOKBACK_DAYS) -> dict:
+def _price_basis(market: str) -> dict[str, str]:
+    """按市场返回视图口径（ohlcv）与事实口径（ohlcv_raw）标注。"""
+    if market == "US":
+        return {"ohlcv": "split_and_dividend_adjusted", "ohlcv_raw": "split_adjusted_plus_action_columns"}
+    return {"ohlcv": "qfq", "ohlcv_raw": "unadjusted"}
+
+
+def _provider_versions() -> dict[str, str | None]:
+    """已安装的第三方数据源包版本；包不存在则 null，不因此报错。"""
+    versions: dict[str, str | None] = {}
+    for pkg in ("yfinance", "akshare"):
+        try:
+            versions[pkg] = importlib.metadata.version(pkg)
+        except importlib.metadata.PackageNotFoundError:
+            versions[pkg] = None
+    return versions
+
+
+def snapshot_symbol(symbol: str, market: str, run_dir: Path, *, lookback_days: int = LOOKBACK_DAYS) -> dict:
     """抓取单标的三类数据落盘。返回 manifest 条目；单项失败记 errors 不抛出。"""
-    entry: dict = {"market": market, "files": {}, "errors": {}}
-    out_dir = day_dir / market / symbol
+    entry: dict = {
+        "market": market,
+        "files": {},
+        "errors": {},
+        "price_basis": _price_basis(market),
+        "actions_captured": market == "US",
+    }
+    if market != "US":
+        entry["actions_note"] = "corporate actions backfillable from exchange announcements; deferred to M3"
+    out_dir = run_dir / market / symbol
     out_dir.mkdir(parents=True, exist_ok=True)
 
     provider = ProviderRegistry.for_market(market)
@@ -65,7 +97,7 @@ def snapshot_symbol(symbol: str, market: str, day_dir: Path, *, lookback_days: i
         df = provider.get_ohlcv(sym, start, end)
         fp = out_dir / "ohlcv.csv"
         df.to_csv(fp)
-        entry["files"]["ohlcv"] = _file_meta(fp, day_dir, rows=len(df), adjust="default")
+        entry["files"]["ohlcv"] = _file_meta(fp, run_dir, rows=len(df), adjust="default")
     except Exception as exc:
         entry["errors"]["ohlcv"] = str(exc)
 
@@ -74,7 +106,7 @@ def snapshot_symbol(symbol: str, market: str, day_dir: Path, *, lookback_days: i
         df_raw = provider.get_ohlcv(sym, start, end, adjust="raw")
         fp = out_dir / "ohlcv_raw.csv"
         df_raw.to_csv(fp)
-        entry["files"]["ohlcv_raw"] = _file_meta(fp, day_dir, rows=len(df_raw), adjust="raw")
+        entry["files"]["ohlcv_raw"] = _file_meta(fp, run_dir, rows=len(df_raw), adjust="raw")
     except Exception as exc:
         entry["errors"]["ohlcv_raw"] = str(exc)
 
@@ -82,7 +114,7 @@ def snapshot_symbol(symbol: str, market: str, day_dir: Path, *, lookback_days: i
         fund = provider.get_fundamentals(sym)
         fp = out_dir / "fundamentals.json"
         fp.write_text(fund.model_dump_json(indent=2), encoding="utf-8")
-        entry["files"]["fundamentals"] = _file_meta(fp, day_dir)
+        entry["files"]["fundamentals"] = _file_meta(fp, run_dir)
     except Exception as exc:
         entry["errors"]["fundamentals"] = str(exc)
 
@@ -93,7 +125,7 @@ def snapshot_symbol(symbol: str, market: str, day_dir: Path, *, lookback_days: i
             json.dumps([n.model_dump(mode="json") for n in news], ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        entry["files"]["news"] = _file_meta(fp, day_dir, count=len(news))
+        entry["files"]["news"] = _file_meta(fp, run_dir, count=len(news))
     except Exception as exc:
         entry["errors"]["news"] = str(exc)
 
@@ -119,21 +151,25 @@ def run_snapshot(
         universe = {m: syms[:SMOKE_PER_MARKET] for m, syms in universe.items()}
 
     day = date_str or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    day_dir = root_dir / day
-    day_dir.mkdir(parents=True, exist_ok=True)
+    run_id = f"run-{datetime.now(timezone.utc).strftime('%H%M%S')}-{secrets.token_hex(2)}"
+    run_dir = root_dir / day / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
 
     manifest: dict = {
         "schema_version": SCHEMA_VERSION,
         "date": day,
+        "run_id": run_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "smoke": smoke,
+        "provider_versions": _provider_versions(),
+        "license_tag": LICENSE_TAG,
         "entries": {},
         "failures": {},
     }
 
     for market, syms in universe.items():
         for symbol in syms:
-            entry = snapshot_symbol(symbol, market, day_dir)
+            entry = snapshot_symbol(symbol, market, run_dir)
             key = f"{market}:{symbol}"
             manifest["entries"][key] = entry
             if entry["errors"]:
@@ -143,15 +179,18 @@ def run_snapshot(
 
     # smoke 运行写独立文件、不碰 last_status —— 手工冒烟不得污染每日全量任务的告警面
     manifest_name = "manifest-smoke.json" if smoke else "manifest.json"
-    (day_dir / manifest_name).write_text(
+    (run_dir / manifest_name).write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    (run_dir / "_COMPLETE").touch()  # 原子完成标记：全部文件+manifest 写完才落此空文件，读取者只认含它的 run
     if not smoke:
         total, failed = len(manifest["entries"]), len(manifest["failures"])
         (root_dir / "last_status.json").write_text(  # 告警面：机器可读的最近一次全量状态
             json.dumps(
                 {
                     "date": day,
+                    "run_id": run_id,
+                    "run_path": str(run_dir.relative_to(root_dir)),
                     "finished_at": datetime.now(timezone.utc).isoformat(),
                     "total": total,
                     "failed": failed,
