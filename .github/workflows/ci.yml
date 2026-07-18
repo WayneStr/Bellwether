@@ -31,6 +31,5 @@ jobs:
         run: uv run mypy src
 
       - name: pytest
-        # 覆盖率门槛 76：M1-D2/D6/E4 落地后实测 ~78%（详见 scripts/ci-local.sh 注释），
-        # 提到 85 需补 CLI/provider 测例。
-        run: uv run pytest --cov=bellwether --cov-fail-under=76
+        # 覆盖率门槛 85：M1 收尾补齐 CLI/provider 测例后实测 ~92%（详见 scripts/ci-local.sh 注释）。
+        run: uv run pytest --cov=bellwether --cov-fail-under=85
