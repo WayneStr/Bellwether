@@ -22,30 +22,39 @@ from ..core.exceptions import (
     LLMRateLimitError,
     ModelNotFoundError,
 )
+from ..core.redact import redact
 from ..core.retry import llm_retry
 from ..models import ModelSpec
 
 
 def translate_anthropic_error(exc: anthropic.APIError) -> LLMError:
-    """anthropic SDK 异常 → Bellwether 类型化异常（可重试性见 exceptions.py 约定）。"""
+    """anthropic SDK 异常 → Bellwether 类型化异常（可重试性见 exceptions.py 约定）。
+
+    消息统一脱敏（D6）：劣质中转可能在错误 body 里回显收到的 key。
+    """
+    cls, msg = _classify(exc)
+    return cls(redact(msg))
+
+
+def _classify(exc: anthropic.APIError) -> tuple[type[LLMError], str]:
     if isinstance(exc, (anthropic.AuthenticationError, anthropic.PermissionDeniedError)):
-        return LLMAuthError(
+        return LLMAuthError, (
             f"认证失败（HTTP {exc.status_code}）：检查 ANTHROPIC_API_KEY 与中转地址。{exc}"
         )
     if isinstance(exc, anthropic.NotFoundError):
-        return ModelNotFoundError(f"模型不存在或中转不支持（HTTP 404）：{exc}")
+        return ModelNotFoundError, f"模型不存在或中转不支持（HTTP 404）：{exc}"
     if isinstance(exc, (anthropic.RateLimitError, anthropic.OverloadedError)):
-        return LLMRateLimitError(f"限流/过载（HTTP {exc.status_code}）：{exc}")
+        return LLMRateLimitError, f"限流/过载（HTTP {exc.status_code}）：{exc}"
     if isinstance(exc, anthropic.APIStatusError):
         body = str(getattr(exc, "body", None) or exc)
         if "model_not_found" in body:  # 中转用 503/4xx 报模型错，只能看 body
-            return ModelNotFoundError(f"模型不可用（HTTP {exc.status_code}）：{body[:200]}")
+            return ModelNotFoundError, f"模型不可用（HTTP {exc.status_code}）：{body[:200]}"
         if exc.status_code >= 500:
-            return LLMConnectionError(f"服务端瞬态错误（HTTP {exc.status_code}）：{body[:200]}")
-        return LLMError(f"LLM 调用失败（HTTP {exc.status_code}）：{body[:200]}")
+            return LLMConnectionError, f"服务端瞬态错误（HTTP {exc.status_code}）：{body[:200]}"
+        return LLMError, f"LLM 调用失败（HTTP {exc.status_code}）：{body[:200]}"
     if isinstance(exc, anthropic.APIConnectionError):  # 含 APITimeoutError
-        return LLMConnectionError(f"连接失败/超时：{exc}")
-    return LLMError(str(exc))
+        return LLMConnectionError, f"连接失败/超时：{exc}"
+    return LLMError, str(exc)
 
 
 class ResilientLLM:

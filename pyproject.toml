@@ -38,8 +38,10 @@ dev = [
     # numpy>=2.3 的打包 stub 用 PEP 695 `type` 语法（须 3.12+ 语法解析），与本项目
     # mypy python_version=3.11 基线冲突；numpy 只是 pandas 的间接依赖，仅类型检查环境需要此上限。
     "numpy<2.3",
+    "keyring>=24",  # D6：测试钥匙串读取路径
 ]
 cn = ["akshare"]  # A股/港股数据源（可选，仅分析 A股/港股需要）
+secure = ["keyring>=24"]  # 密钥存系统钥匙串（可选；环境变量始终可用且优先）
 
 [project.scripts]
 bellwether = "bellwether.cli:app"

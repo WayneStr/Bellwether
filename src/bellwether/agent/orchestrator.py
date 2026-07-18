@@ -3,17 +3,29 @@
 模型选择全部经 ModelRouter（三级覆盖）。deep=True 走 deep_report 角色。
 可靠性（D2）：显式超时 + SDK 重试关闭（重试统一由 tenacity 管，见 core/retry.py）
 + 模型档降级链（降级发生时在报告中明示）。
+溯源（E4 最小）：每次 analyze 落一个 provenance trace（成功/失败都落，旁路不阻塞）。
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from anthropic import Anthropic
 from anthropic.types import Message
 
 from ..config import AppConfig
-from ..data.base import ProviderRegistry
+from ..core.exceptions import BellwetherError
+from ..core.trace import (
+    AnalysisTrace,
+    LLMCallRecord,
+    ToolCallRecord,
+    new_trace,
+    prompt_version,
+    write_trace,
+)
+from ..data.base import MarketDataProvider, ProviderRegistry
+from ..models import ModelSpec
 from . import tools as tools_mod
 from .llm import ResilientLLM
 from .prompts import SYSTEM_PROMPT, analyze_prompt
@@ -34,6 +46,7 @@ class Orchestrator:
             max_retries=0,  # SDK 内置重试关闭：退避策略统一在 core/retry.py，可测可控
         )
         self.llm = ResilientLLM(self.client)
+        self.last_trace_path: Path | None = None
 
     def analyze(
         self,
@@ -46,8 +59,26 @@ class Orchestrator:
         provider = ProviderRegistry.for_symbol(symbol)
         role = "deep_report" if deep else "synthesis"
         chain = self.router.resolve_chain(role, model=model_override, **param_overrides)
-        primary_model = chain[0].model
 
+        trace = new_trace(symbol, deep, [s.model for s in chain], prompt_version(SYSTEM_PROMPT))
+        self.last_trace_path = None
+        try:
+            return self._run_loop(symbol, deep, provider, chain, trace)
+        except BellwetherError as exc:
+            trace.outcome = f"error:{type(exc).__name__}"
+            raise
+        finally:
+            self.last_trace_path = write_trace(trace)
+
+    def _run_loop(
+        self,
+        symbol: str,
+        deep: bool,
+        provider: MarketDataProvider,
+        chain: list[ModelSpec],
+        trace: AnalysisTrace,
+    ) -> str:
+        primary_model = chain[0].model
         messages: list[dict] = [{"role": "user", "content": analyze_prompt(symbol, deep)}]
 
         for _ in range(_MAX_TURNS):
@@ -57,11 +88,15 @@ class Orchestrator:
                 tools=tools_mod.TOOL_SCHEMAS,
                 messages=messages,
             )
+            trace.llm_calls.append(LLMCallRecord(model=used.model, stop_reason=resp.stop_reason))
+            trace.final_model = used.model
             # 降级后从降级档继续：之前的档已证明失败，后续轮次不再逐轮撞它
             if used is not chain[0]:
+                trace.degraded = True
                 chain = chain[chain.index(used) :]
 
             if resp.stop_reason != "tool_use":
+                trace.outcome = "ok"
                 return _finalize(_collect_text(resp), primary_model, used.model)
 
             messages.append({"role": "assistant", "content": resp.content})
@@ -72,6 +107,9 @@ class Orchestrator:
                     tool_input = block.input  # type: ignore[union-attr]
                     tool_use_id = block.id  # type: ignore[union-attr]
                     output = tools_mod.execute_tool(tool_name, tool_input, provider)
+                    trace.tool_calls.append(
+                        ToolCallRecord(name=tool_name, input=dict(tool_input), output=output)
+                    )
                     tool_results.append(
                         {
                             "type": "tool_result",
@@ -81,6 +119,7 @@ class Orchestrator:
                     )
             messages.append({"role": "user", "content": tool_results})
 
+        trace.outcome = "max_turns"
         return "（已达到最大工具调用轮次，未能得出最终研判。可稍后重试。）"
 
 

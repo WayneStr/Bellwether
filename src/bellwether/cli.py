@@ -7,8 +7,9 @@ from rich.console import Console
 from rich.table import Table
 
 from .agent.router import VALID_ROLES, ModelRouter
-from .config import load_config
+from .config import KEYRING_SERVICE, KEYRING_USERNAME, api_key_source, load_config
 from .core.exceptions import BellwetherError
+from .core.redact import redact
 
 app = typer.Typer(
     add_completion=False,
@@ -47,17 +48,20 @@ def analyze(
     if max_tokens is not None:
         overrides["max_tokens"] = max_tokens
 
+    orch = Orchestrator(config)
     try:
         with console.status(f"正在分析 {symbol} ……"):
-            verdict = Orchestrator(config).analyze(
-                symbol, deep=deep, model_override=model, **overrides
-            )
+            verdict = orch.analyze(symbol, deep=deep, model_override=model, **overrides)
     except BellwetherError as exc:  # 重试与降级仍未成功 → 明示失败（D2），不落半截报告
-        console.print(f"[red]分析失败[/red]（{type(exc).__name__}）：{exc}")
+        console.print(f"[red]分析失败[/red]（{type(exc).__name__}）：{redact(str(exc))}")
         console.print("[dim]已按类型重试/降级仍失败；可稍后重试，或用 --model 指定其他模型。[/dim]")
+        if orch.last_trace_path:
+            console.print(f"[dim]故障 trace：{orch.last_trace_path}[/dim]")
         raise typer.Exit(code=1) from exc
 
     render_analysis(symbol, verdict, show_disclaimer=config.report.disclaimer)
+    if orch.last_trace_path:
+        console.print(f"[dim]分析溯源已记录：{orch.last_trace_path}[/dim]")
     if output:
         from .report import export_markdown
 
@@ -83,10 +87,33 @@ def config_show(
         table.add_row(role, spec.model, str(spec.params.temperature), str(spec.params.max_tokens))
     console.print(table)
 
-    key_state = "已设置" if config.anthropic_api_key else "[red]未设置[/red]"
+    source = api_key_source()
+    key_state = {"env": "已设置（环境变量）", "keyring": "已设置（系统钥匙串）"}.get(
+        source, "[red]未设置[/red]"
+    )
     console.print(f"ANTHROPIC_API_KEY：{key_state}")
     console.print(
         f"API 请求地址：{config.anthropic_base_url or '官方默认 https://api.anthropic.com'}"
+    )
+
+
+@config_app.command("set-key")
+def config_set_key() -> None:
+    """把 API key 存入系统钥匙串（keyring）。环境变量 ANTHROPIC_API_KEY 始终优先。"""
+    try:
+        import keyring
+    except ImportError as exc:
+        console.print("[red]未安装 keyring[/red]，请先：uv pip install 'bellwether[secure]'")
+        raise typer.Exit(code=1) from exc
+
+    value = typer.prompt("请输入 API key（输入不回显）", hide_input=True).strip()
+    if not value:
+        console.print("[red]输入为空，未保存。[/red]")
+        raise typer.Exit(code=1)
+    keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, value)
+    console.print(
+        f"[green]已存入系统钥匙串[/green]（服务名 {KEYRING_SERVICE}）。"
+        "环境变量 ANTHROPIC_API_KEY 存在时优先于钥匙串。"
     )
 
 
@@ -197,7 +224,7 @@ def portfolio(
         with console.status("正在计算组合指标 ……"):
             report = PortfolioModule().compute(symbols, period=period)
     except BellwetherError as exc:
-        console.print(f"[red]组合分析失败[/red]（{type(exc).__name__}）：{exc}")
+        console.print(f"[red]组合分析失败[/red]（{type(exc).__name__}）：{redact(str(exc))}")
         raise typer.Exit(code=1) from exc
     render_portfolio(report, show_disclaimer=config.report.disclaimer)
 

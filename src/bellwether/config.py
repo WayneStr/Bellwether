@@ -37,15 +37,41 @@ class AppConfig(BaseModel):
     data: DataConfig = Field(default_factory=DataConfig)
     report: ReportConfig = Field(default_factory=ReportConfig)
 
-    # 密钥不进配置文件，只从环境变量读取。
+    # 密钥不进配置文件：环境变量优先，其次系统钥匙串（keyring，可选依赖）。
     @property
     def anthropic_api_key(self) -> str | None:
-        return os.environ.get("ANTHROPIC_API_KEY")
+        return os.environ.get("ANTHROPIC_API_KEY") or _keyring_get_api_key()
 
     @property
     def anthropic_base_url(self) -> str | None:
         # config.toml 显式设置优先，其次环境变量 ANTHROPIC_BASE_URL，最后 None（SDK 用官方默认）
         return self.api.base_url or os.environ.get("ANTHROPIC_BASE_URL") or None
+
+
+KEYRING_SERVICE = "bellwether"
+KEYRING_USERNAME = "anthropic_api_key"
+
+
+def _keyring_get_api_key() -> str | None:
+    """从系统钥匙串读 key（D6）。keyring 未安装或后端不可用（无桌面环境等）
+    一律静默返回 None——钥匙串只是便利项，环境变量永远可用。"""
+    try:
+        import keyring
+    except ImportError:
+        return None
+    try:
+        return keyring.get_password(KEYRING_SERVICE, KEYRING_USERNAME)
+    except Exception:
+        return None
+
+
+def api_key_source() -> str:
+    """当前 key 的来源（诊断用，绝不返回 key 本身）：env / keyring / none。"""
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return "env"
+    if _keyring_get_api_key():
+        return "keyring"
+    return "none"
 
 
 def load_config(path: str | os.PathLike[str] | None = None) -> AppConfig:
