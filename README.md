@@ -30,7 +30,8 @@ uv pip install akshare               # 分析 A股/港股时需要（可选）
 ## 配置
 
 1. 复制模板并按需改模型：`cp config.example.toml config.toml`
-2. 设置 API Key（不写进配置文件）：`set -x ANTHROPIC_API_KEY sk-...`（bash: `export ...`）
+2. 设置 API Key（不写进配置文件）：`set -x ANTHROPIC_API_KEY sk-...`（bash: `export ...`）；
+   或存进系统钥匙串：`uv pip install -e ".[secure]"` 后 `bellwether config set-key`（环境变量始终优先）
 3. （可选）自定义 API 地址（中转/代理）：`config.toml` 的 `[api] base_url`，或环境变量 `ANTHROPIC_BASE_URL`（前者优先）
 
 ## 用法
@@ -47,7 +48,8 @@ bellwether analyze AAPL -o report.md    # 导出 markdown
 bellwether portfolio AAPL MSFT 600519 --period 1y
 
 # 配置 / 模型
-bellwether config show                  # 生效模型 + key 状态 + API 地址
+bellwether config show                  # 生效模型 + key 状态（含来源）+ API 地址
+bellwether config set-key               # 把 key 存入系统钥匙串（需 [secure] 可选依赖）
 bellwether models                       # 列出当前 API 地址可用的模型 id
 bellwether analyze AAPL --model <id> --temperature 0.2   # 运行时覆盖模型
 ```
@@ -61,16 +63,22 @@ bellwether analyze AAPL --model <id> --temperature 0.2   # 运行时覆盖模型
 | 市场 | 行情 | 基本面 | 新闻 |
 |------|------|--------|------|
 | 美股 US | yfinance | yfinance | yfinance |
-| A股 CN | 东财 `stock_zh_a_hist` | `stock_a_indicator_lg` | 东财 `stock_news_em` |
+| A股 CN | 东财 `stock_zh_a_hist` → 新浪 `stock_zh_a_daily`（降级链） | `stock_a_indicator_lg` | 东财 `stock_news_em` |
 | 港股 HK | 新浪 `stock_hk_daily` | （暂留空，待补） | 东财 `stock_news_em` |
 
 > akshare 数据源在国内直连最稳。代码已对东财域自动绕过系统代理直连（`_bypass_proxy_for_eastmoney`），一般无需手动配代理规则；前提是本机能直连相应站点。
+
+## 可靠性与溯源
+
+- **数据源**：异常按类型决定行为（连接/限流类退避重试，空数据立即失败）；单源熔断（连续失败后快速跳过，冷却自愈）；A股行情东财失败自动降级新浪。
+- **LLM**：限流/瞬态退避重试；模型持续不可用时自动降一档（`deep_report`→`synthesis`→`parse`，只换模型 id 不换任务参数），报告尾部**明示**降级；认证失败立即明示不掩盖。用户显式 `--model` 时不降级。
+- **溯源**：每次 `analyze` 落一份 provenance trace（输入哈希/prompt 版本/模型链/完整 tool 调用记录）到 `~/.bellwether/traces/`，成功失败都记录；输出与落盘文本统一脱敏（密钥零泄漏，见 `SECURITY.md`）。
 
 ## 测试
 
 ```fish
 uv pip install -e ".[dev]"
-pytest        # 47 个单测，确定性计算（指标/DCF/组合/路由/解析）全覆盖
+pytest        # 112 个单测：确定性计算全覆盖 + 数据源/LLM 两侧故障注入（熔断/重试/降级）
 ```
 
 ## 合规

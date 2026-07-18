@@ -12,6 +12,6 @@ echo "== mypy src =="
 uv run mypy src
 
 echo "== pytest (coverage) =="
-# 覆盖率门槛 65：M1-D1 落地时实测 ~67%（不足 80，按验收规则降到实际值-2），
-# 待 M1 后段补测例再提到 85。
-uv run pytest --cov=bellwether --cov-fail-under=65
+# 覆盖率门槛 76：M1-D2/D6/E4 落地后实测 ~78%（按验收规则锁到实际值-2，防回退）；
+# 提到 85 需补 CLI 命令路径与 provider fundamentals/news 测例（M1 收尾或 M2 顺带）。
+uv run pytest --cov=bellwether --cov-fail-under=76
