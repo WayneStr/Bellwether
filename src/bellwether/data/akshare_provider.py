@@ -7,12 +7,21 @@ akshare 为可选依赖（仅分析 A股/港股时需要）：延迟 import，�
 from __future__ import annotations
 
 import os
+import socket
 from datetime import UTC, date, datetime
 
 import pandas as pd
 
+from ..core.circuit import breaker_for
+from ..core.exceptions import (
+    BellwetherError,
+    ConfigError,
+    DataUnavailableError,
+    RateLimitError,
+)
+from ..core.retry import datasource_retry
 from ..models import FundamentalData, NewsItem, TradingRules
-from .base import MarketDataProvider, ProviderRegistry
+from .base import MarketDataProvider, ProviderRegistry, call_source
 from .cache import DEFAULT_TTL_DAYS, cached_dataframe
 
 _OHLCV_COLS = ["open", "high", "low", "close", "volume"]
@@ -37,12 +46,21 @@ def _bypass_proxy_for_eastmoney() -> None:
             os.environ[var] = f"{current},eastmoney.com" if current else "eastmoney.com"
 
 
+def _ensure_socket_timeout() -> None:
+    """akshare 不暴露 HTTP timeout 参数，requests 默认无超时会挂死；socket 级默认超时
+    是唯一兜底（spec-003：provider 拥有底层超时）。只在未设置时设定，不覆盖显式配置；
+    httpx（anthropic SDK）自带显式超时不受此影响。"""
+    if socket.getdefaulttimeout() is None:
+        socket.setdefaulttimeout(60.0)
+
+
 def _require_akshare():
     try:
         import akshare as ak
     except ImportError as exc:  # pragma: no cover
-        raise RuntimeError("分析 A股/港股需要 akshare，请先安装：uv pip install akshare") from exc
+        raise ConfigError("分析 A股/港股需要 akshare，请先安装：uv pip install akshare") from exc
     _bypass_proxy_for_eastmoney()
+    _ensure_socket_timeout()
     return ak
 
 
@@ -58,11 +76,24 @@ def _f(value) -> float | None:
 def _normalize_hist(df: pd.DataFrame) -> pd.DataFrame:
     """akshare 中文列 hist DataFrame → 标准 OHLCV（日期索引，丢弃价格缺失行）。"""
     if df is None or df.empty:
-        raise ValueError("数据源返回空行情")
+        raise DataUnavailableError("数据源返回空行情")
     df = df.rename(columns=_CN_COL_MAP)
     df["date"] = pd.to_datetime(df["date"])
     df = df.set_index("date").reindex(columns=_OHLCV_COLS)
     return df.dropna(subset=["open", "high", "low", "close"])
+
+
+def _load_cn_em(ak, code: str, start: date, end: date, ak_adjust: str) -> pd.DataFrame:
+    """A股 东财日线（主源）。"""
+    return _normalize_hist(
+        ak.stock_zh_a_hist(
+            symbol=code,
+            period="daily",
+            start_date=start.strftime("%Y%m%d"),
+            end_date=end.strftime("%Y%m%d"),
+            adjust=ak_adjust,
+        )
+    )
 
 
 def _load_cn_sina(ak, code: str, start: date, end: date, ak_adjust: str) -> pd.DataFrame:
@@ -75,11 +106,20 @@ def _load_cn_sina(ak, code: str, start: date, end: date, ak_adjust: str) -> pd.D
         adjust=ak_adjust,
     )
     if df is None or df.empty:
-        raise ValueError("数据源返回空行情")
+        raise DataUnavailableError("数据源返回空行情")
     df = df.copy()
     df["date"] = pd.to_datetime(df["date"])
     df = df.set_index("date").reindex(columns=_OHLCV_COLS)
     return df.dropna(subset=["open", "high", "low", "close"])
+
+
+def _merge_chain_error(em_err: BellwetherError, sina_err: BellwetherError) -> BellwetherError:
+    """双源都失败时合并为一个类型化异常：任一源可重试 → 整链可重试（退避后网络
+    抖动可能恢复）；两侧都不可重试（空数据/熔断）→ 不重试。"""
+    msg = f"东财与新浪均失败：em={em_err}; sina={sina_err}"
+    if isinstance(em_err, RateLimitError) or isinstance(sina_err, RateLimitError):
+        return RateLimitError(msg)
+    return DataUnavailableError(msg)
 
 
 def _fetch_em_news(ak, code: str, limit: int) -> list[NewsItem]:
@@ -122,6 +162,7 @@ class AkshareCNProvider(MarketDataProvider):
     def resolve_symbol(self, query: str) -> str:
         return query.strip().upper()
 
+    @datasource_retry
     def get_ohlcv(
         self,
         symbol: str,
@@ -136,23 +177,20 @@ class AkshareCNProvider(MarketDataProvider):
         ak_adjust = "" if adjust == "raw" else "qfq"  # ""=不复权原始价（A0 事实层）
 
         def _load() -> pd.DataFrame:
+            # 降级链：东财（主源，单源熔断）→ 新浪；东财熔断打开时直接走新浪不再白等。
             try:
-                return _normalize_hist(
-                    ak.stock_zh_a_hist(
-                        symbol=code,
-                        period="daily",
-                        start_date=start.strftime("%Y%m%d"),
-                        end_date=end.strftime("%Y%m%d"),
-                        adjust=ak_adjust,
-                    )
+                return call_source(
+                    breaker_for("eastmoney", "kline_cn"),
+                    lambda: _load_cn_em(ak, code, start, end, ak_adjust),
                 )
-            except Exception as em_err:
+            except BellwetherError as em_err:
                 try:
-                    return _load_cn_sina(ak, code, start, end, ak_adjust)
-                except Exception as sina_err:
-                    raise ValueError(
-                        f"东财与新浪均失败：em={em_err}; sina={sina_err}"
-                    ) from sina_err
+                    return call_source(
+                        breaker_for("sina", "kline_cn"),
+                        lambda: _load_cn_sina(ak, code, start, end, ak_adjust),
+                    )
+                except BellwetherError as sina_err:
+                    raise _merge_chain_error(em_err, sina_err) from sina_err
 
         return cached_dataframe(key, DEFAULT_TTL_DAYS, _load)
 
@@ -200,6 +238,7 @@ class AkshareHKProvider(MarketDataProvider):
     def resolve_symbol(self, query: str) -> str:
         return query.strip().upper()
 
+    @datasource_retry
     def get_ohlcv(
         self,
         symbol: str,
@@ -213,15 +252,18 @@ class AkshareHKProvider(MarketDataProvider):
         key = f"ohlcv:HK:{code}:{start}:{end}:{interval}:{adjust}"
         ak_adjust = "" if adjust == "raw" else "qfq"
 
-        def _load() -> pd.DataFrame:
+        def _fetch() -> pd.DataFrame:
             # 东财港股接口（33.push2his）部分网络不可达，改用新浪源（英文列、返回全历史）
             df = ak.stock_hk_daily(symbol=code, adjust=ak_adjust)
             if df is None or df.empty:
-                raise ValueError(f"未取到 {symbol} 的港股行情")
+                raise DataUnavailableError(f"未取到 {symbol} 的港股行情")
             df = df.copy()
             df["date"] = pd.to_datetime(df["date"])
             df = df.set_index("date").loc[str(start) : str(end)]
             return df.reindex(columns=_OHLCV_COLS).dropna(subset=["open", "high", "low", "close"])
+
+        def _load() -> pd.DataFrame:
+            return call_source(breaker_for("sina", "kline_hk"), _fetch)
 
         return cached_dataframe(key, DEFAULT_TTL_DAYS, _load)
 

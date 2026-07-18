@@ -7,11 +7,15 @@ from datetime import UTC, date, datetime
 import pandas as pd
 import yfinance as yf
 
+from ..core.circuit import breaker_for
+from ..core.exceptions import DataUnavailableError
+from ..core.retry import datasource_retry
 from ..models import FundamentalData, NewsItem, TradingRules
-from .base import MarketDataProvider, ProviderRegistry
+from .base import MarketDataProvider, ProviderRegistry, call_source
 from .cache import DEFAULT_TTL_DAYS, cached_dataframe
 
 _OHLCV_COLS = ["open", "high", "low", "close", "volume"]
+_HTTP_TIMEOUT = 30  # 秒；yfinance history 支持显式超时（spec-003：provider 拥有底层超时）
 
 
 @ProviderRegistry.register("US")
@@ -19,6 +23,7 @@ class YFinanceProvider(MarketDataProvider):
     market = "US"
     source = "yfinance"
 
+    @datasource_retry
     def get_ohlcv(
         self,
         symbol: str,
@@ -30,13 +35,14 @@ class YFinanceProvider(MarketDataProvider):
         key = f"ohlcv:{self.market}:{symbol}:{start}:{end}:{interval}:{adjust}"
         raw_mode = adjust == "raw"
 
-        def _load() -> pd.DataFrame:
+        def _fetch() -> pd.DataFrame:
             df = yf.Ticker(symbol).history(
                 start=start,
                 end=end,
                 interval=interval,
                 auto_adjust=not raw_mode,
                 actions=raw_mode,  # raw 模式带分红/拆股事件列（A0 事实层）
+                timeout=_HTTP_TIMEOUT,
             )
             df = df.rename(columns=str.lower)
             if raw_mode:
@@ -48,8 +54,13 @@ class YFinanceProvider(MarketDataProvider):
             # 去掉价格缺失的行：yfinance 尾部偶发 NaN（未收盘/停牌），否则污染 last_close 等
             df = df.dropna(subset=["open", "high", "low", "close"])
             if df.empty:
-                raise ValueError(f"未取到 {symbol} 的有效行情（yfinance 返回空或全为缺失）")
+                raise DataUnavailableError(
+                    f"未取到 {symbol} 的有效行情（yfinance 返回空或全为缺失）"
+                )
             return df
+
+        def _load() -> pd.DataFrame:
+            return call_source(breaker_for("yfinance", "history"), _fetch)
 
         return cached_dataframe(key, DEFAULT_TTL_DAYS, _load)
 

@@ -12,6 +12,7 @@ import pandas as pd
 
 from ..analysis.fundamental import FundamentalModule
 from ..analysis.technical import TechnicalModule
+from ..core.exceptions import BellwetherError, LLMRateLimitError, RateLimitError
 from ..data.base import MarketDataProvider, period_to_start
 from ..models import OHLCVBar, OHLCVSummary
 
@@ -122,8 +123,20 @@ def execute_tool(name: str, tool_input: dict, provider: MarketDataProvider) -> s
         if name == "get_news":
             return _get_news(tool_input, provider)
         return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
+    except BellwetherError as exc:  # 类型化失败：让 LLM 知道错误种类与是否值得换参重试
+        return json.dumps(
+            {
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+                "retryable": isinstance(exc, (RateLimitError, LLMRateLimitError)),
+            },
+            ensure_ascii=False,
+        )
     except Exception as exc:  # 让 LLM 看到失败原因而非直接崩溃
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        return json.dumps(
+            {"error": str(exc), "error_type": "unexpected", "retryable": False},
+            ensure_ascii=False,
+        )
 
 
 def _get_price_history(tool_input: dict, provider: MarketDataProvider) -> str:

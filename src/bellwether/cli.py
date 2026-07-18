@@ -8,6 +8,7 @@ from rich.table import Table
 
 from .agent.router import VALID_ROLES, ModelRouter
 from .config import load_config
+from .core.exceptions import BellwetherError
 
 app = typer.Typer(
     add_completion=False,
@@ -46,8 +47,15 @@ def analyze(
     if max_tokens is not None:
         overrides["max_tokens"] = max_tokens
 
-    with console.status(f"正在分析 {symbol} ……"):
-        verdict = Orchestrator(config).analyze(symbol, deep=deep, model_override=model, **overrides)
+    try:
+        with console.status(f"正在分析 {symbol} ……"):
+            verdict = Orchestrator(config).analyze(
+                symbol, deep=deep, model_override=model, **overrides
+            )
+    except BellwetherError as exc:  # 重试与降级仍未成功 → 明示失败（D2），不落半截报告
+        console.print(f"[red]分析失败[/red]（{type(exc).__name__}）：{exc}")
+        console.print("[dim]已按类型重试/降级仍失败；可稍后重试，或用 --model 指定其他模型。[/dim]")
+        raise typer.Exit(code=1) from exc
 
     render_analysis(symbol, verdict, show_disclaimer=config.report.disclaimer)
     if output:
@@ -185,8 +193,12 @@ def portfolio(
     from .analysis.portfolio import PortfolioModule
     from .report import render_portfolio
 
-    with console.status("正在计算组合指标 ……"):
-        report = PortfolioModule().compute(symbols, period=period)
+    try:
+        with console.status("正在计算组合指标 ……"):
+            report = PortfolioModule().compute(symbols, period=period)
+    except BellwetherError as exc:
+        console.print(f"[red]组合分析失败[/red]（{type(exc).__name__}）：{exc}")
+        raise typer.Exit(code=1) from exc
     render_portfolio(report, show_disclaimer=config.report.disclaimer)
 
 

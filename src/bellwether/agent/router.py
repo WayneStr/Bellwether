@@ -13,6 +13,10 @@ from ..models import ModelConfig, ModelSpec
 
 VALID_ROLES = ("parse", "synthesis", "deep_report")
 
+# LLM 故障降级顺序（D2）：换的只是模型 id，任务参数（temperature/max_tokens）保留
+# 原角色的——降级是「换一台发动机」，不是换任务。parse 已是最低档，无处可降。
+_FALLBACK_ROLE = {"deep_report": "synthesis", "synthesis": "parse", "parse": None}
+
 
 class ModelRouter:
     def __init__(self, config: ModelConfig):
@@ -43,3 +47,27 @@ class ModelRouter:
                 resolved.params.extra[key] = value
 
         return resolved
+
+    def resolve_chain(
+        self, role: str, *, model: str | None = None, **param_overrides: Any
+    ) -> list[ModelSpec]:
+        """主选 + 降级档的模型链（D2 LLM 降级）。
+
+        用户显式 --model 覆盖时链长为 1：明确指定的模型失败就明示失败，
+        不偷偷换成别的。降级档与已在链中的模型 id 重复时跳过（用户可能把
+        多个角色配成同一模型）。
+        """
+        primary = self.resolve(role, model=model, **param_overrides)
+        if model:
+            return [primary]
+
+        chain = [primary]
+        fallback_role = _FALLBACK_ROLE.get(role)
+        while fallback_role:
+            fb_model = getattr(self._config, fallback_role).model
+            if fb_model not in [spec.model for spec in chain]:
+                spec = primary.model_copy(deep=True)
+                spec.model = fb_model
+                chain.append(spec)
+            fallback_role = _FALLBACK_ROLE.get(fallback_role)
+        return chain

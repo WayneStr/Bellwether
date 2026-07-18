@@ -16,7 +16,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from .exceptions import LLMRateLimitError, RateLimitError
+from .exceptions import LLMConnectionError, LLMRateLimitError, RateLimitError
 
 _T = TypeVar("_T")
 
@@ -28,9 +28,10 @@ datasource_retry: Callable[[Callable[..., _T]], Callable[..., _T]] = retry(
     reraise=True,
 )
 
-# LLM：仅 429/overloaded 退避重试（2→4→8…最多 60s，3 次）；认证/模型不存在立即上抛。
+# LLM：429/overloaded 与连接/服务端瞬态退避重试（2→4→8…最多 60s，3 次）；
+# 认证/模型不存在立即上抛（由降级链决定是否换档）。
 llm_retry: Callable[[Callable[..., _T]], Callable[..., _T]] = retry(
-    retry=retry_if_exception_type(LLMRateLimitError),
+    retry=retry_if_exception_type((LLMRateLimitError, LLMConnectionError)),
     wait=wait_exponential(multiplier=2, min=2, max=60),
     stop=stop_after_attempt(3),
     reraise=True,

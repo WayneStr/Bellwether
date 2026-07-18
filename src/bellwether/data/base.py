@@ -7,11 +7,41 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from datetime import date, timedelta
+from typing import TypeVar
 
 import pandas as pd
 
+from ..core.circuit import CircuitBreaker
+from ..core.exceptions import BellwetherError, DataUnavailableError, RateLimitError
 from ..models import FundamentalData, NewsItem, TradingRules
+
+_T = TypeVar("_T")
+
+
+def classify_provider_error(exc: Exception) -> BellwetherError:
+    """把数据源底层异常翻译为类型化异常（D2）：按类型决定可重试性，不做字符串匹配。
+
+    连接/超时类（东财 RemoteDisconnected 属 ConnectionError 家族；requests 的
+    ConnectionError/Timeout 也继承 OSError）→ RateLimitError 退避可重试；
+    其余（空数据、解析失败如 akshare 改列名）→ DataUnavailableError 不重试。
+    """
+    if isinstance(exc, BellwetherError):
+        return exc
+    if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
+        return RateLimitError(f"{type(exc).__name__}: {exc}")
+    return DataUnavailableError(f"{type(exc).__name__}: {exc}")
+
+
+def call_source(breaker: CircuitBreaker, fetch: Callable[[], _T]) -> _T:
+    """单个数据源的守护调用：熔断 + 异常类型化。provider 内每个源都经此入口。"""
+    try:
+        return breaker.call(fetch)
+    except BellwetherError:
+        raise
+    except Exception as exc:
+        raise classify_provider_error(exc) from exc
 
 
 def period_to_start(period: str, end: date) -> date:

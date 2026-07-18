@@ -121,7 +121,10 @@ def test_cn_both_sources_fail(monkeypatch):
         lambda key, ttl, loader: loader(),
     )
 
-    with pytest.raises(ValueError) as exc_info:
+    # 双源连接类失败 → 类型化为可重试的 RateLimitError（D2），并保留两侧原因
+    from bellwether.core.exceptions import RateLimitError
+
+    with pytest.raises(RateLimitError) as exc_info:
         AkshareCNProvider().get_ohlcv("600519", date(2026, 1, 1), date(2026, 1, 7))
     msg = str(exc_info.value)
     assert "em 挂了" in msg

@@ -4,8 +4,9 @@
 （现状 provider 里 `except Exception` + 字符串拼接是脆弱的，D2 逐步替换为这套类型）。
 
 可重试性约定（retry.py 依赖此语义）：
-- RateLimitError / LLMRateLimitError → 退避后可重试
-- DataUnavailableError / LLMAuthError / ModelNotFoundError → 不可重试（重试无意义或需人工）
+- RateLimitError / LLMRateLimitError / LLMConnectionError → 退避后可重试
+- DataUnavailableError / CircuitOpenError / LLMAuthError / ModelNotFoundError
+  → 不可重试（重试无意义、需人工、或熔断要求快速失败）
 """
 
 from __future__ import annotations
@@ -32,6 +33,10 @@ class RateLimitError(DataSourceError):
     """被限流/拒绝/连接被断（如东财 RemoteDisconnected）——退避后可重试。"""
 
 
+class CircuitOpenError(DataSourceError):
+    """熔断器打开：该数据源近期连续失败，跳过调用快速失败——不重试，等冷却。"""
+
+
 # ─────────────────────────── LLM ───────────────────────────
 class LLMError(BellwetherError):
     """LLM 调用类错误的基类。"""
@@ -43,6 +48,10 @@ class LLMAuthError(LLMError):
 
 class LLMRateLimitError(LLMError):
     """LLM 限流（429 / overloaded）——退避后可重试。"""
+
+
+class LLMConnectionError(LLMError):
+    """网络/服务端瞬态故障（连接失败/超时/5xx 非 model_not_found）——退避后可重试。"""
 
 
 class ModelNotFoundError(LLMError):
