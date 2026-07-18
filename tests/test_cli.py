@@ -203,6 +203,17 @@ def test_portfolio_bellwether_error_exits_1(monkeypatch, tmp_path):
     assert result.exit_code == 1
 
 
+def test_portfolio_value_error_exits_1(monkeypatch, tmp_path):
+    # PortfolioModule 的输入校验抛裸 ValueError（标的太少等）→ 同样友好失败而非 traceback
+    class _FailingPortfolioModule:
+        def compute(self, symbols, period="1y"):
+            raise ValueError("组合分析至少需要 2 只标的")
+
+    monkeypatch.setattr("bellwether.analysis.portfolio.PortfolioModule", _FailingPortfolioModule)
+    result = runner.invoke(app, ["portfolio", "AAPL", "--config", str(tmp_path / "nope.toml")])
+    assert result.exit_code == 1
+
+
 # ─────────────────────────── snapshot ───────────────────────────
 def test_snapshot_all_success_exits_0(monkeypatch, tmp_path):
     manifest = {

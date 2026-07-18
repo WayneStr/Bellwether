@@ -223,7 +223,9 @@ def portfolio(
     try:
         with console.status("正在计算组合指标 ……"):
             report = PortfolioModule().compute(symbols, period=period)
-    except BellwetherError as exc:
+    except (BellwetherError, ValueError) as exc:
+        # ValueError：PortfolioModule 的输入校验（标的太少/共同交易日不足）——
+        # 同样呈现为友好失败而非裸 traceback
         console.print(f"[red]组合分析失败[/red]（{type(exc).__name__}）：{redact(str(exc))}")
         raise typer.Exit(code=1) from exc
     render_portfolio(report, show_disclaimer=config.report.disclaimer)
