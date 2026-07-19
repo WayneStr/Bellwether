@@ -15,7 +15,7 @@ from ..analysis.technical import TechnicalModule
 from ..core.context import AnalysisContext
 from ..core.exceptions import BellwetherError, LLMRateLimitError, RateLimitError
 from ..data.base import MarketDataProvider, period_to_start
-from ..ir.models import Evidence
+from ..ir.models import Derivation, Evidence
 from ..ir.recorder import ToolRecorder, ref
 from ..models import OHLCVBar, OHLCVSummary
 
@@ -124,17 +124,17 @@ def execute_tool(
 
     trace 非 None 时走证据化路径（M2-B0）：provider 响应落可寻址捕获、可上报值经
     抽取器注册为 Evidence、数值以 {v, eid} 形态返回给 LLM。trace=None 保持 M1 行为
-    （portfolio 等非 LLM 路径）。technical/compare_peers 的证据化在下一批接入。
+    （portfolio 等非 LLM 路径）。
     """
     try:
         if name == "get_price_history":
             return _get_price_history(tool_input, provider, context=context, trace=trace)
         if name == "get_technical_analysis":
-            return _get_technical_analysis(tool_input, provider, context=context)
+            return _get_technical_analysis(tool_input, provider, context=context, trace=trace)
         if name == "get_fundamentals":
             return _get_fundamentals(tool_input, provider, context=context, trace=trace)
         if name == "compare_peers":
-            return _compare_peers(tool_input, provider, context=context)
+            return _compare_peers(tool_input, provider, context=context, trace=trace)
         if name == "get_news":
             return _get_news(tool_input, provider, context=context, trace=trace)
         return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
@@ -219,12 +219,78 @@ def _get_price_history(
     return json.dumps(out, ensure_ascii=False)
 
 
+# TechnicalReport.indicators 键 → (抽取器, 抽取器 args)；last_close 复用 price_history 同名抽取器
+_TECH_INDICATOR_MAP: dict[str, tuple[str, dict[str, object]]] = {
+    "last_close": ("ohlcv.last_close", {}),
+    "MA20": ("ohlcv.sma_last", {"window": 20}),
+    "MA50": ("ohlcv.sma_last", {"window": 50}),
+    "RSI14": ("ohlcv.rsi_last", {"period": 14}),
+    "MACD": ("ohlcv.macd_last", {"component": "macd"}),
+    "MACD_signal": ("ohlcv.macd_last", {"component": "signal"}),
+    "MACD_hist": ("ohlcv.macd_last", {"component": "hist"}),
+    "BOLL_mid": ("ohlcv.boll_last", {"band": "middle"}),
+    "BOLL_upper": ("ohlcv.boll_last", {"band": "upper"}),
+    "BOLL_lower": ("ohlcv.boll_last", {"band": "lower"}),
+}
+
+
 def _get_technical_analysis(
-    tool_input: dict, provider: MarketDataProvider, *, context: AnalysisContext
+    tool_input: dict,
+    provider: MarketDataProvider,
+    *,
+    context: AnalysisContext,
+    trace: ToolRecorder | None = None,
 ) -> str:
     symbol = provider.resolve_symbol(tool_input["symbol"], context=context)
     period = tool_input.get("period", "6mo")
-    return _TECH.compute(symbol, provider, period, context=context).model_dump_json()
+    if trace is None:
+        return _TECH.compute(symbol, provider, period, context=context).model_dump_json()
+
+    end = context.as_of.date()
+    start = period_to_start(period, end)
+    df = provider.get_ohlcv(symbol, start, end, context=context)  # 单次取数，捕获与报告同源
+    report = _TECH.build_report(symbol, period, df, provider.source, context=context)
+    captured = trace.capture(
+        provider_id=provider.source,
+        tool_name="get_technical_analysis",
+        method="get_ohlcv",
+        canonical_args={
+            "symbol": symbol,
+            "start": str(start),
+            "end": str(end),
+            "interval": "1d",
+            "adjust": "default",
+        },
+        payload={"records": _df_records(df)},
+        captured_at=_attrs_captured_at(df),
+        upstream_source=df.attrs.get("upstream_source"),
+        data_type="ohlcv",
+    )
+    basis = "qfq" if provider.market in ("CN", "HK") else "split_and_dividend_adjusted"
+    out = report.model_dump(mode="json")
+    last_close_evidence: Evidence | None = None
+    for key, value in report.indicators.items():
+        mapping = _TECH_INDICATOR_MAP.get(key)
+        if mapping is None or value is None:
+            continue
+        extractor_id, extractor_args = mapping
+        evidence = trace.register_value(
+            captured,
+            metric_name=key.lower(),
+            extractor_id=extractor_id,
+            extractor_args=extractor_args,
+            kind="series_stat",
+            price_basis=basis,
+            anchor_date=context.as_of.date(),
+        )
+        if evidence is None:
+            continue
+        out["indicators"][key] = ref(evidence)
+        if key == "last_close":
+            last_close_evidence = evidence
+    if last_close_evidence is not None:
+        out["last_close"] = ref(last_close_evidence)
+    return json.dumps(out, ensure_ascii=False)
 
 
 # 报告 metrics 键 → (raw 字段, 抽取器, unit, 是否挂币种)；与 FundamentalReport 呈现口径一致
@@ -276,12 +342,57 @@ def _get_fundamentals(
         )
         if evidence is not None:
             out["metrics"][metric_key] = ref(evidence)
-    # dcf_fair_value 是 op="model" 的派生证据，随下一批（假设集证据化）接入；本批保持裸值
+
+    if report.dcf_fair_value is not None:
+        # DCF 输入基础字段：先注册为 derivation.inputs 的原材料，不进 metrics 替换
+        dcf_input_eids: list[str] = []
+        for field in ("free_cashflow", "shares_outstanding", "total_debt", "total_cash"):
+            if getattr(raw, field) is None:
+                continue
+            input_evidence = trace.register_value(
+                captured,
+                metric_name=field,
+                extractor_id="fund.field",
+                extractor_args={"field": field},
+                kind="metric",
+            )
+            if input_evidence is not None:
+                dcf_input_eids.append(input_evidence.eid)
+
+        net_debt = 0.0
+        if raw.total_debt is not None or raw.total_cash is not None:
+            net_debt = (raw.total_debt or 0.0) - (raw.total_cash or 0.0)
+
+        dcf_evidence = trace.register_derived(
+            metric_name="dcf_fair_value",
+            value=report.dcf_fair_value,
+            derivation=Derivation(
+                op="model",
+                inputs=dcf_input_eids,
+                params={**report.dcf_assumptions, "net_debt": net_debt},
+                formula="simple_dcf",
+            ),
+            currency=currency,
+        )
+        out["dcf_fair_value"] = ref(dcf_evidence)
     return json.dumps(out, ensure_ascii=False)
 
 
+# comparison 单指标键 → (raw 字段, 是否挂币种)；ROE 按现状口径注册原始小数（非百分比）
+_COMPARE_METRIC_MAP: dict[str, tuple[str, bool]] = {
+    "PE": ("pe", False),
+    "PB": ("pb", False),
+    "ROE": ("roe", False),
+    "market_cap": ("market_cap", True),
+}
+
+
 def _compare_peers(
-    tool_input: dict, provider: MarketDataProvider, *, context: AnalysisContext
+    tool_input: dict,
+    provider: MarketDataProvider,
+    *,
+    context: AnalysisContext,
+    trace: ToolRecorder | None = None,
 ) -> str:
     symbol = provider.resolve_symbol(tool_input["symbol"], context=context)
     peers = [provider.resolve_symbol(p, context=context) for p in tool_input.get("peers", [])]
@@ -289,9 +400,33 @@ def _compare_peers(
     for sym in [symbol, *peers]:
         try:
             d = provider.get_fundamentals(sym, context=context)
-            comparison[sym] = {"PE": d.pe, "PB": d.pb, "ROE": d.roe, "market_cap": d.market_cap}
         except Exception as exc:
             comparison[sym] = {"error": str(exc)}
+            continue
+        row: dict = {"PE": d.pe, "PB": d.pb, "ROE": d.roe, "market_cap": d.market_cap}
+        if trace is not None:
+            captured = trace.capture(
+                provider_id=provider.source,
+                tool_name="compare_peers",
+                method="get_fundamentals",
+                canonical_args={"symbol": sym},
+                payload=d.model_dump(mode="json"),
+                captured_at=d.fetched_at,
+                data_type="fundamentals",
+            )
+            currency = d.currency if d.currency and len(d.currency) == 3 else None
+            for metric_key, (field, has_currency) in _COMPARE_METRIC_MAP.items():
+                evidence = trace.register_value(
+                    captured,
+                    metric_name=field,
+                    extractor_id="fund.field",
+                    extractor_args={"field": field},
+                    kind="metric",
+                    currency=currency if has_currency else None,
+                )
+                if evidence is not None:
+                    row[metric_key] = ref(evidence)
+        comparison[sym] = row
     return json.dumps({"target": symbol, "comparison": comparison}, ensure_ascii=False)
 
 

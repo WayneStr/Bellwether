@@ -16,6 +16,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+import pandas as pd
+
+from ..analysis import indicators as ind
+
 ExtractorFn = Callable[..., float | str]
 
 _REGISTRY: dict[str, ExtractorFn] = {}
@@ -74,6 +78,51 @@ def _period_high(payload: dict[str, Any]) -> float:
 @register_extractor("ohlcv.period_low")
 def _period_low(payload: dict[str, Any]) -> float:
     return min(float(r["low"]) for r in payload["records"])
+
+
+# ─────────────────────────── OHLCV 技术指标（复用 indicators.py 纯函数）───────────────────────────
+def _close_series(payload: dict[str, Any]) -> pd.Series:
+    return pd.Series(_closes(payload))
+
+
+def _last_or_raise(series: pd.Series) -> float:
+    """序列末位非 NaN 值，4 位四舍五入（与 TechnicalModule._last 口径一致，R8 忠实重算）。
+
+    预热窗口不足时全 NaN：raise ValueError——register_value 借此返回 None 跳过，
+    不静默造值。
+    """
+    valid = series.dropna()
+    if valid.empty:
+        raise ValueError("insufficient data: all-NaN window")
+    return round(float(valid.iloc[-1]), 4)
+
+
+@register_extractor("ohlcv.sma_last")
+def _sma_last(payload: dict[str, Any], *, window: int) -> float:
+    return _last_or_raise(ind.sma(_close_series(payload), window))
+
+
+@register_extractor("ohlcv.rsi_last")
+def _rsi_last(payload: dict[str, Any], *, period: int = 14) -> float:
+    return _last_or_raise(ind.rsi(_close_series(payload), period))
+
+
+_MACD_COMPONENTS = ("macd", "signal", "hist")  # 对齐 indicators.macd 的返回顺序
+
+
+@register_extractor("ohlcv.macd_last")
+def _macd_last(payload: dict[str, Any], *, component: str) -> float:
+    by_component = dict(zip(_MACD_COMPONENTS, ind.macd(_close_series(payload)), strict=True))
+    return _last_or_raise(by_component[component])
+
+
+_BOLL_BANDS = ("middle", "upper", "lower")  # 对齐 indicators.bollinger 的返回顺序
+
+
+@register_extractor("ohlcv.boll_last")
+def _boll_last(payload: dict[str, Any], *, band: str) -> float:
+    by_band = dict(zip(_BOLL_BANDS, ind.bollinger(_close_series(payload), 20), strict=True))
+    return _last_or_raise(by_band[band])
 
 
 # ─────────────────────────── fundamentals ───────────────────────────

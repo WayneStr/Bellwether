@@ -19,7 +19,7 @@ from ..core.capture import CaptureStore
 from ..core.context import AnalysisContext
 from ..core.trace import EvidenceBinding
 from .extract import run_extractor
-from .models import Evidence, SourceRef
+from .models import Derivation, Evidence, SourceRef
 from .store import EvidenceStore
 
 STALE_AFTER = timedelta(hours=72)  # 覆盖周末缓存；超龄证据必须明示 stale（红线 4）
@@ -164,6 +164,45 @@ class ToolRecorder:
             )
         )
         return registered
+
+    def register_derived(
+        self,
+        *,
+        metric_name: str,
+        value: float,
+        derivation: Derivation,
+        kind: str = "metric",
+        unit: str | None = None,
+        currency: str | None = None,
+    ) -> Evidence:
+        """注册一条确定性派生 Evidence（如 DCF 内在价值）。
+
+        仅供确定性分析模块调用（LLM 不可达——LLM 只能经 tool 层看到 {v, eid} 引用，
+        无法自行构造 derivation；spec-001 §3 P12 的 params 栅栏语境：params 只能由
+        确定性代码写入，杜绝 LLM 编造假设）。value 由调用方直接传入（确定性代码算出，
+        非抽取器产出），与 register_value 的构造性保证不同源。
+
+        不 append EvidenceBinding：bindings 表只装 source 类证据（R7/R8 核验对象），
+        derived 无捕获无抽取器可核验，只能靠 derivation.inputs 的传递闭包追溯到其
+        source 祖先。fingerprint 仍由 EvidenceStore.register 照常计算。
+
+        confidence 恒为 "derived"；派生证据的 PIT 语义（是否/如何随输入证据的
+        stale 状态传播）留待 M3 细化，本方法不处理传播规则。
+        """
+        now = self.context.clock.now()
+        return self.evidence.register(
+            metric_name=metric_name,
+            kind=kind,
+            value=value,
+            unit=unit,
+            currency=currency,
+            first_seen_at=now,
+            available_at=now,
+            pit_class="observed",
+            source=None,
+            derivation=derivation,
+            confidence="derived",
+        )
 
 
 def ref(evidence: Evidence) -> dict[str, Any]:

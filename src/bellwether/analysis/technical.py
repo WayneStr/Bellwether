@@ -31,6 +31,20 @@ class TechnicalModule:
         end = context.as_of.date()
         start = period_to_start(period, end)
         df = provider.get_ohlcv(symbol, start, end, context=context)
+        return self.build_report(
+            symbol, period, df, getattr(provider, "source", "unknown"), context=context
+        )
+
+    def build_report(
+        self,
+        symbol: str,
+        period: str,
+        df: pd.DataFrame,
+        source: str,
+        *,
+        context: AnalysisContext,
+    ) -> TechnicalReport:
+        """以已取得的 OHLCV 组装报告（tool 证据化路径复用，避免二次取数）。"""
         close = df["close"]
 
         macd_line, macd_sig, macd_hist = ind.macd(close)
@@ -58,7 +72,7 @@ class TechnicalModule:
             indicators=snapshot,
             signals=self._describe(last_close, snapshot, macd_hist),
             fetched_at=context.clock.now(),
-            source=getattr(provider, "source", "unknown"),
+            source=source,
         )
 
     @staticmethod
