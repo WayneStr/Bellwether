@@ -15,6 +15,7 @@ from anthropic import Anthropic
 from anthropic.types import Message
 
 from ..config import AppConfig
+from ..core.context import AnalysisContext
 from ..core.exceptions import BellwetherError
 from ..core.trace import (
     AnalysisTrace,
@@ -52,6 +53,7 @@ class Orchestrator:
         self,
         symbol: str,
         *,
+        context: AnalysisContext,
         deep: bool = False,
         model_override: str | None = None,
         **param_overrides: Any,
@@ -60,10 +62,12 @@ class Orchestrator:
         role = "deep_report" if deep else "synthesis"
         chain = self.router.resolve_chain(role, model=model_override, **param_overrides)
 
-        trace = new_trace(symbol, deep, [s.model for s in chain], prompt_version(SYSTEM_PROMPT))
+        trace = new_trace(
+            symbol, deep, [s.model for s in chain], prompt_version(SYSTEM_PROMPT), context
+        )
         self.last_trace_path = None
         try:
-            return self._run_loop(symbol, deep, provider, chain, trace)
+            return self._run_loop(symbol, deep, provider, chain, trace, context)
         except BellwetherError as exc:
             trace.outcome = f"error:{type(exc).__name__}"
             raise
@@ -77,6 +81,7 @@ class Orchestrator:
         provider: MarketDataProvider,
         chain: list[ModelSpec],
         trace: AnalysisTrace,
+        context: AnalysisContext,
     ) -> str:
         primary_model = chain[0].model
         messages: list[dict] = [{"role": "user", "content": analyze_prompt(symbol, deep)}]
@@ -106,7 +111,9 @@ class Orchestrator:
                     tool_name = block.name  # type: ignore[union-attr]
                     tool_input = block.input  # type: ignore[union-attr]
                     tool_use_id = block.id  # type: ignore[union-attr]
-                    output = tools_mod.execute_tool(tool_name, tool_input, provider)
+                    output = tools_mod.execute_tool(
+                        tool_name, tool_input, provider, context=context
+                    )
                     trace.tool_calls.append(
                         ToolCallRecord(name=tool_name, input=dict(tool_input), output=output)
                     )

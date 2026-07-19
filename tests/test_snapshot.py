@@ -17,10 +17,10 @@ class _FakeProvider:
     def __init__(self, fail_symbol: str | None = None):
         self.fail_symbol = fail_symbol
 
-    def resolve_symbol(self, q):
+    def resolve_symbol(self, q, context=None):
         return q.upper()
 
-    def get_ohlcv(self, symbol, start, end, interval="1d", adjust="default"):
+    def get_ohlcv(self, symbol, start, end, interval="1d", adjust="default", context=None):
         if symbol == self.fail_symbol:
             raise ValueError("simulated outage")
         idx = pd.date_range("2026-01-01", periods=5, freq="D")
@@ -28,10 +28,10 @@ class _FakeProvider:
             {"open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 100.0}, index=idx
         )
 
-    def get_fundamentals(self, symbol):
+    def get_fundamentals(self, symbol, context=None):
         return FundamentalData(symbol=symbol, fetched_at=datetime.now(UTC), source="fake")
 
-    def get_news(self, symbol, limit=20):
+    def get_news(self, symbol, limit=20, context=None):
         return [NewsItem(title="t1"), NewsItem(title="t2")]
 
 
@@ -56,10 +56,10 @@ def test_builtin_golden_set_shape():
         assert len(set(syms)) == 30, f"{market} 有重复标的"
 
 
-def test_run_snapshot_writes_files_and_manifest(tmp_path, monkeypatch, golden_file):
+def test_run_snapshot_writes_files_and_manifest(tmp_path, monkeypatch, golden_file, ctx):
     _patch_provider(monkeypatch, _FakeProvider())
     manifest = run_snapshot(
-        tmp_path / "snaps", golden_path=golden_file, delay=0, date_str="2026-07-16"
+        tmp_path / "snaps", context=ctx, golden_path=golden_file, delay=0, date_str="2026-07-16"
     )
     day = tmp_path / "snaps" / "2026-07-16"
     run_dirs = list(day.glob("run-*"))
@@ -106,10 +106,14 @@ def test_run_snapshot_writes_files_and_manifest(tmp_path, monkeypatch, golden_fi
     assert status["run_path"] == str(Path("2026-07-16") / run_dir.name)
 
 
-def test_run_snapshot_isolates_runs_on_same_day(tmp_path, monkeypatch, golden_file):
+def test_run_snapshot_isolates_runs_on_same_day(tmp_path, monkeypatch, golden_file, ctx):
     _patch_provider(monkeypatch, _FakeProvider())
-    m1 = run_snapshot(tmp_path / "snaps", golden_path=golden_file, delay=0, date_str="2026-07-16")
-    m2 = run_snapshot(tmp_path / "snaps", golden_path=golden_file, delay=0, date_str="2026-07-16")
+    m1 = run_snapshot(
+        tmp_path / "snaps", context=ctx, golden_path=golden_file, delay=0, date_str="2026-07-16"
+    )
+    m2 = run_snapshot(
+        tmp_path / "snaps", context=ctx, golden_path=golden_file, delay=0, date_str="2026-07-16"
+    )
     day = tmp_path / "snaps" / "2026-07-16"
     run_dirs = {p.name for p in day.glob("run-*")}
     assert m1["run_id"] != m2["run_id"]  # 同日多次运行互不覆盖
@@ -119,9 +123,9 @@ def test_run_snapshot_isolates_runs_on_same_day(tmp_path, monkeypatch, golden_fi
         assert (day / run_id / "US" / "AAA" / "ohlcv.csv").exists()
 
 
-def test_run_snapshot_records_failures_without_aborting(tmp_path, monkeypatch, golden_file):
+def test_run_snapshot_records_failures_without_aborting(tmp_path, monkeypatch, golden_file, ctx):
     _patch_provider(monkeypatch, _FakeProvider(fail_symbol="AAA"))
-    manifest = run_snapshot(tmp_path / "s", golden_path=golden_file, delay=0)
+    manifest = run_snapshot(tmp_path / "s", context=ctx, golden_path=golden_file, delay=0)
     assert "ohlcv" in manifest["failures"]["US:AAA"]
     # 失败标的的其他数据类与其他标的不受影响
     assert "fundamentals" in manifest["entries"]["US:AAA"]["files"]
@@ -129,11 +133,13 @@ def test_run_snapshot_records_failures_without_aborting(tmp_path, monkeypatch, g
     assert exit_code_for(manifest) == 2  # 部分失败
 
 
-def test_market_filter_and_smoke(tmp_path, monkeypatch):
+def test_market_filter_and_smoke(tmp_path, monkeypatch, ctx):
     _patch_provider(monkeypatch, _FakeProvider())
     big = tmp_path / "big.toml"
     big.write_text('[symbols]\nUS = ["A1","A2","A3","A4","A5"]\nCN = ["C1"]\n', encoding="utf-8")
-    manifest = run_snapshot(tmp_path / "s", golden_path=big, markets=["US"], smoke=True, delay=0)
+    manifest = run_snapshot(
+        tmp_path / "s", context=ctx, golden_path=big, markets=["US"], smoke=True, delay=0
+    )
     keys = list(manifest["entries"])
     assert keys == ["US:A1", "US:A2", "US:A3"]  # 只有 US、且 smoke 截前 3
 
@@ -143,7 +149,7 @@ def test_market_filter_and_smoke(tmp_path, monkeypatch):
     assert not (tmp_path / "s" / "last_status.json").exists()
 
 
-def test_exit_code_total_failure(tmp_path, monkeypatch, golden_file):
+def test_exit_code_total_failure(tmp_path, monkeypatch, golden_file, ctx):
     class _Dead(_FakeProvider):
         def get_ohlcv(self, *a, **k):
             raise ValueError("down")
@@ -155,5 +161,5 @@ def test_exit_code_total_failure(tmp_path, monkeypatch, golden_file):
             raise ValueError("down")
 
     _patch_provider(monkeypatch, _Dead())
-    manifest = run_snapshot(tmp_path / "s", golden_path=golden_file, delay=0)
+    manifest = run_snapshot(tmp_path / "s", context=ctx, golden_path=golden_file, delay=0)
     assert exit_code_for(manifest) == 1

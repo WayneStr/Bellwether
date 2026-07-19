@@ -6,12 +6,12 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
 
 import pandas as pd
 
 from ..analysis.fundamental import FundamentalModule
 from ..analysis.technical import TechnicalModule
+from ..core.context import AnalysisContext
 from ..core.exceptions import BellwetherError, LLMRateLimitError, RateLimitError
 from ..data.base import MarketDataProvider, period_to_start
 from ..models import OHLCVBar, OHLCVSummary
@@ -109,19 +109,21 @@ TOOL_SCHEMAS = [
 
 
 # ─────────────────────────── 执行分发 ───────────────────────────
-def execute_tool(name: str, tool_input: dict, provider: MarketDataProvider) -> str:
+def execute_tool(
+    name: str, tool_input: dict, provider: MarketDataProvider, *, context: AnalysisContext
+) -> str:
     """执行工具，返回作为 tool_result 内容的 JSON 字符串。异常也转成结构化错误返回。"""
     try:
         if name == "get_price_history":
-            return _get_price_history(tool_input, provider)
+            return _get_price_history(tool_input, provider, context=context)
         if name == "get_technical_analysis":
-            return _get_technical_analysis(tool_input, provider)
+            return _get_technical_analysis(tool_input, provider, context=context)
         if name == "get_fundamentals":
-            return _get_fundamentals(tool_input, provider)
+            return _get_fundamentals(tool_input, provider, context=context)
         if name == "compare_peers":
-            return _compare_peers(tool_input, provider)
+            return _compare_peers(tool_input, provider, context=context)
         if name == "get_news":
-            return _get_news(tool_input, provider)
+            return _get_news(tool_input, provider, context=context)
         return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
     except BellwetherError as exc:  # 类型化失败：让 LLM 知道错误种类与是否值得换参重试
         return json.dumps(
@@ -139,43 +141,51 @@ def execute_tool(name: str, tool_input: dict, provider: MarketDataProvider) -> s
         )
 
 
-def _get_price_history(tool_input: dict, provider: MarketDataProvider) -> str:
-    symbol = provider.resolve_symbol(tool_input["symbol"])
+def _get_price_history(
+    tool_input: dict, provider: MarketDataProvider, *, context: AnalysisContext
+) -> str:
+    symbol = provider.resolve_symbol(tool_input["symbol"], context=context)
     period = tool_input.get("period", "6mo")
-    end = datetime.now(UTC).date()
+    end = context.as_of.date()
     start = period_to_start(period, end)
-    df = provider.get_ohlcv(symbol, start, end)
-    return _summarize_ohlcv(df, symbol, "1d", provider.source).model_dump_json()
+    df = provider.get_ohlcv(symbol, start, end, context=context)
+    return _summarize_ohlcv(df, symbol, "1d", provider.source, context=context).model_dump_json()
 
 
-def _get_technical_analysis(tool_input: dict, provider: MarketDataProvider) -> str:
-    symbol = provider.resolve_symbol(tool_input["symbol"])
+def _get_technical_analysis(
+    tool_input: dict, provider: MarketDataProvider, *, context: AnalysisContext
+) -> str:
+    symbol = provider.resolve_symbol(tool_input["symbol"], context=context)
     period = tool_input.get("period", "6mo")
-    return _TECH.compute(symbol, provider, period).model_dump_json()
+    return _TECH.compute(symbol, provider, period, context=context).model_dump_json()
 
 
-def _get_fundamentals(tool_input: dict, provider: MarketDataProvider) -> str:
-    symbol = provider.resolve_symbol(tool_input["symbol"])
-    return _FUND.compute(symbol, provider).model_dump_json()
+def _get_fundamentals(
+    tool_input: dict, provider: MarketDataProvider, *, context: AnalysisContext
+) -> str:
+    symbol = provider.resolve_symbol(tool_input["symbol"], context=context)
+    return _FUND.compute(symbol, provider, context=context).model_dump_json()
 
 
-def _compare_peers(tool_input: dict, provider: MarketDataProvider) -> str:
-    symbol = provider.resolve_symbol(tool_input["symbol"])
-    peers = [provider.resolve_symbol(p) for p in tool_input.get("peers", [])]
+def _compare_peers(
+    tool_input: dict, provider: MarketDataProvider, *, context: AnalysisContext
+) -> str:
+    symbol = provider.resolve_symbol(tool_input["symbol"], context=context)
+    peers = [provider.resolve_symbol(p, context=context) for p in tool_input.get("peers", [])]
     comparison: dict[str, dict] = {}
     for sym in [symbol, *peers]:
         try:
-            d = provider.get_fundamentals(sym)
+            d = provider.get_fundamentals(sym, context=context)
             comparison[sym] = {"PE": d.pe, "PB": d.pb, "ROE": d.roe, "market_cap": d.market_cap}
         except Exception as exc:
             comparison[sym] = {"error": str(exc)}
     return json.dumps({"target": symbol, "comparison": comparison}, ensure_ascii=False)
 
 
-def _get_news(tool_input: dict, provider: MarketDataProvider) -> str:
-    symbol = provider.resolve_symbol(tool_input["symbol"])
+def _get_news(tool_input: dict, provider: MarketDataProvider, *, context: AnalysisContext) -> str:
+    symbol = provider.resolve_symbol(tool_input["symbol"], context=context)
     limit = int(tool_input.get("limit", 10))
-    items = provider.get_news(symbol, limit)
+    items = provider.get_news(symbol, limit, context=context)
     return json.dumps(
         {
             "symbol": symbol,
@@ -196,7 +206,13 @@ def _get_news(tool_input: dict, provider: MarketDataProvider) -> str:
 
 # ─────────────────────────── 确定性辅助 ───────────────────────────
 def _summarize_ohlcv(
-    df: pd.DataFrame, symbol: str, interval: str, source: str, recent: int = 10
+    df: pd.DataFrame,
+    symbol: str,
+    interval: str,
+    source: str,
+    recent: int = 10,
+    *,
+    context: AnalysisContext,
 ) -> OHLCVSummary:
     bars = [
         OHLCVBar(
@@ -221,6 +237,6 @@ def _summarize_ohlcv(
         last_close=last_close,
         period_return_pct=ret,
         recent_bars=bars,
-        fetched_at=datetime.now(UTC),
+        fetched_at=context.clock.now(),
         source=source,
     )

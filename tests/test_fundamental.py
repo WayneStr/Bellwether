@@ -9,7 +9,7 @@ from bellwether.models import FundamentalData
 class _FakeProvider:
     source = "fake"
 
-    def get_fundamentals(self, symbol):
+    def get_fundamentals(self, symbol, context=None):
         return FundamentalData(
             symbol=symbol,
             roe=0.14,  # 小数比率 → 应转成 14.0
@@ -22,14 +22,14 @@ class _FakeProvider:
         )
 
 
-def test_ratio_fields_converted_to_pct():
-    r = FundamentalModule().compute("TEST", _FakeProvider())
+def test_ratio_fields_converted_to_pct(ctx):
+    r = FundamentalModule().compute("TEST", _FakeProvider(), context=ctx)
     assert r.metrics["ROE(%)"] == 14.0
     assert r.metrics["毛利率(%)"] == 48.0
     assert r.metrics["PE"] == 30.0  # 非比率字段不受影响
 
 
-def test_dcf_triggered_when_data_present():
-    r = FundamentalModule().compute("TEST", _FakeProvider())
+def test_dcf_triggered_when_data_present(ctx):
+    r = FundamentalModule().compute("TEST", _FakeProvider(), context=ctx)
     assert r.dcf_fair_value is not None
     assert r.dcf_note and "参考" in r.dcf_note

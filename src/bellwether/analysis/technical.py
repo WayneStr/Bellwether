@@ -5,10 +5,9 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 import pandas as pd
 
+from ..core.context import AnalysisContext
 from ..data.base import MarketDataProvider, period_to_start
 from ..models import TechnicalReport
 from . import indicators as ind
@@ -22,11 +21,16 @@ def _last(series: pd.Series) -> float | None:
 
 class TechnicalModule:
     def compute(
-        self, symbol: str, provider: MarketDataProvider, period: str = "6mo"
+        self,
+        symbol: str,
+        provider: MarketDataProvider,
+        period: str = "6mo",
+        *,
+        context: AnalysisContext,
     ) -> TechnicalReport:
-        end = datetime.now(UTC).date()
+        end = context.as_of.date()
         start = period_to_start(period, end)
-        df = provider.get_ohlcv(symbol, start, end)
+        df = provider.get_ohlcv(symbol, start, end, context=context)
         close = df["close"]
 
         macd_line, macd_sig, macd_hist = ind.macd(close)
@@ -53,7 +57,7 @@ class TechnicalModule:
             data_asof=str(df.index[-1].date()),
             indicators=snapshot,
             signals=self._describe(last_close, snapshot, macd_hist),
-            fetched_at=datetime.now(UTC),
+            fetched_at=context.clock.now(),
             source=getattr(provider, "source", "unknown"),
         )
 

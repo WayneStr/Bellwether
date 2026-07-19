@@ -8,6 +8,7 @@ import pandas as pd
 import yfinance as yf
 
 from ..core.circuit import breaker_for
+from ..core.context import AnalysisContext
 from ..core.exceptions import DataUnavailableError
 from ..core.retry import datasource_retry
 from ..models import FundamentalData, NewsItem, TradingRules
@@ -31,6 +32,8 @@ class YFinanceProvider(MarketDataProvider):
         end: date,
         interval: str = "1d",
         adjust: str = "default",
+        *,
+        context: AnalysisContext,
     ) -> pd.DataFrame:
         key = f"ohlcv:{self.market}:{symbol}:{start}:{end}:{interval}:{adjust}"
         raw_mode = adjust == "raw"
@@ -64,7 +67,7 @@ class YFinanceProvider(MarketDataProvider):
 
         return cached_dataframe(key, DEFAULT_TTL_DAYS, _load)
 
-    def get_fundamentals(self, symbol: str) -> FundamentalData:
+    def get_fundamentals(self, symbol: str, *, context: AnalysisContext) -> FundamentalData:
         info = yf.Ticker(symbol).info or {}
         return FundamentalData(
             symbol=symbol,
@@ -84,11 +87,11 @@ class YFinanceProvider(MarketDataProvider):
             peg=info.get("trailingPegRatio") or info.get("pegRatio"),
             ps=info.get("priceToSalesTrailing12Months"),
             gross_margins=info.get("grossMargins"),
-            fetched_at=datetime.now(UTC),
+            fetched_at=context.clock.now(),
             source=self.source,
         )
 
-    def get_news(self, symbol: str, limit: int = 20) -> list[NewsItem]:
+    def get_news(self, symbol: str, limit: int = 20, *, context: AnalysisContext) -> list[NewsItem]:
         raw = yf.Ticker(symbol).news or []
         items: list[NewsItem] = []
         for entry in raw[:limit]:

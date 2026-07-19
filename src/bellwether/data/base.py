@@ -14,6 +14,7 @@ from typing import TypeVar
 import pandas as pd
 
 from ..core.circuit import CircuitBreaker
+from ..core.context import AnalysisContext
 from ..core.exceptions import BellwetherError, DataUnavailableError, RateLimitError
 from ..models import FundamentalData, NewsItem, TradingRules
 
@@ -84,6 +85,8 @@ class MarketDataProvider(ABC):
         end: date,
         interval: str = "1d",
         adjust: str = "default",
+        *,
+        context: AnalysisContext,
     ) -> pd.DataFrame:
         """返回 OHLCV，索引为日期。
 
@@ -92,16 +95,18 @@ class MarketDataProvider(ABC):
         """
 
     @abstractmethod
-    def get_fundamentals(self, symbol: str) -> FundamentalData: ...
+    def get_fundamentals(self, symbol: str, *, context: AnalysisContext) -> FundamentalData: ...
 
     @abstractmethod
-    def get_news(self, symbol: str, limit: int = 20) -> list[NewsItem]: ...
+    def get_news(
+        self, symbol: str, limit: int = 20, *, context: AnalysisContext
+    ) -> list[NewsItem]: ...
 
     @abstractmethod
     def trading_rules(self) -> TradingRules:
         """市场差异（时区/涨跌停/结算）封装在这里。"""
 
-    def resolve_symbol(self, query: str) -> str:
+    def resolve_symbol(self, query: str, *, context: AnalysisContext) -> str:
         """名称/代码归一化，默认原样大写，子类可覆盖。"""
         return query.strip().upper()
 

@@ -6,11 +6,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
 
+from ..core.context import AnalysisContext
 from ..data.base import MarketDataProvider, ProviderRegistry, period_to_start
 from ..models import PortfolioReport
 
@@ -24,19 +24,22 @@ class PortfolioModule:
         period: str = "1y",
         weights: dict[str, float] | None = None,
         provider_for: Callable[[str], MarketDataProvider] | None = None,
+        *,
+        context: AnalysisContext,
     ) -> PortfolioReport:
         provider_for = provider_for or ProviderRegistry.for_symbol
         symbols = [s.strip().upper() for s in symbols]
         if len(symbols) < 2:
             raise ValueError("组合分析至少需要 2 只标的")
 
-        end = datetime.now(UTC).date()
+        end = context.as_of.date()
         start = period_to_start(period, end)
 
         closes: dict[str, pd.Series] = {}
         for sym in symbols:
             provider = provider_for(sym)
-            df = provider.get_ohlcv(provider.resolve_symbol(sym), start, end)
+            resolved = provider.resolve_symbol(sym, context=context)
+            df = provider.get_ohlcv(resolved, start, end, context=context)
             closes[sym] = df["close"]
 
         prices = pd.DataFrame(closes).dropna()  # 共同交易日对齐
@@ -81,5 +84,5 @@ class PortfolioModule:
             annualized_returns=ann_ret,
             max_drawdowns=max_dd,
             concentration_hhi=round(float(np.sum(w_vec**2)), 4),
-            fetched_at=datetime.now(UTC),
+            fetched_at=context.clock.now(),
         )

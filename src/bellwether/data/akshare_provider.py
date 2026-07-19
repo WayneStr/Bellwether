@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import os
 import socket
-from datetime import UTC, date, datetime
+from datetime import date
 
 import pandas as pd
 
 from ..core.circuit import breaker_for
+from ..core.context import AnalysisContext
 from ..core.exceptions import (
     BellwetherError,
     ConfigError,
@@ -159,7 +160,7 @@ class AkshareCNProvider(MarketDataProvider):
     def _to_code(symbol: str) -> str:
         return symbol.strip().upper().split(".")[0]  # 600519.SH -> 600519
 
-    def resolve_symbol(self, query: str) -> str:
+    def resolve_symbol(self, query: str, *, context: AnalysisContext) -> str:
         return query.strip().upper()
 
     @datasource_retry
@@ -170,6 +171,8 @@ class AkshareCNProvider(MarketDataProvider):
         end: date,
         interval: str = "1d",
         adjust: str = "default",
+        *,
+        context: AnalysisContext,
     ) -> pd.DataFrame:
         ak = _require_akshare()
         code = self._to_code(symbol)
@@ -194,7 +197,7 @@ class AkshareCNProvider(MarketDataProvider):
 
         return cached_dataframe(key, DEFAULT_TTL_DAYS, _load)
 
-    def get_fundamentals(self, symbol: str) -> FundamentalData:
+    def get_fundamentals(self, symbol: str, *, context: AnalysisContext) -> FundamentalData:
         ak = _require_akshare()
         code = self._to_code(symbol)
         pe = pb = ps = None
@@ -213,11 +216,11 @@ class AkshareCNProvider(MarketDataProvider):
             pe=pe,
             pb=pb,
             ps=ps,
-            fetched_at=datetime.now(UTC),
+            fetched_at=context.clock.now(),
             source=self.source,
         )
 
-    def get_news(self, symbol: str, limit: int = 20) -> list[NewsItem]:
+    def get_news(self, symbol: str, limit: int = 20, *, context: AnalysisContext) -> list[NewsItem]:
         return _fetch_em_news(_require_akshare(), self._to_code(symbol), limit)
 
     def trading_rules(self) -> TradingRules:
@@ -235,7 +238,7 @@ class AkshareHKProvider(MarketDataProvider):
     def _to_code(symbol: str) -> str:
         return symbol.strip().upper().split(".")[0].zfill(5)  # 700 -> 00700
 
-    def resolve_symbol(self, query: str) -> str:
+    def resolve_symbol(self, query: str, *, context: AnalysisContext) -> str:
         return query.strip().upper()
 
     @datasource_retry
@@ -246,6 +249,8 @@ class AkshareHKProvider(MarketDataProvider):
         end: date,
         interval: str = "1d",
         adjust: str = "default",
+        *,
+        context: AnalysisContext,
     ) -> pd.DataFrame:
         ak = _require_akshare()
         code = self._to_code(symbol)
@@ -267,16 +272,16 @@ class AkshareHKProvider(MarketDataProvider):
 
         return cached_dataframe(key, DEFAULT_TTL_DAYS, _load)
 
-    def get_fundamentals(self, symbol: str) -> FundamentalData:
+    def get_fundamentals(self, symbol: str, *, context: AnalysisContext) -> FundamentalData:
         # 港股估值 akshare 接口未统一，先返回基础壳（估值待接入）
         return FundamentalData(
             symbol=symbol,
             currency="HKD",
-            fetched_at=datetime.now(UTC),
+            fetched_at=context.clock.now(),
             source=self.source,
         )
 
-    def get_news(self, symbol: str, limit: int = 20) -> list[NewsItem]:
+    def get_news(self, symbol: str, limit: int = 20, *, context: AnalysisContext) -> list[NewsItem]:
         return _fetch_em_news(_require_akshare(), self._to_code(symbol), limit)
 
     def trading_rules(self) -> TradingRules:

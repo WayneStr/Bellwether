@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import typer
 from rich.console import Console
 from rich.table import Table
 
 from .agent.router import VALID_ROLES, ModelRouter
 from .config import KEYRING_SERVICE, KEYRING_USERNAME, api_key_source, load_config
+from .core.context import AnalysisContext, SystemClock
 from .core.exceptions import BellwetherError
 from .core.redact import redact
 
@@ -21,6 +24,18 @@ app.add_typer(config_app, name="config")
 console = Console()
 
 
+def _make_context(as_of: str | None) -> AnalysisContext:
+    """CLI 入口构造唯一的 AnalysisContext（spec-002 §1）：无 --as-of 时读一次系统时钟；
+    有 --as-of 时解析并 UTC 规范化（naive 输入按 UTC 解释）。capture_policy 固定 live
+    （M2 后续批次接 cassette）。"""
+    clock = SystemClock()
+    if as_of is None:
+        return AnalysisContext(as_of=clock.now(), capture_policy="live", clock=clock)
+    parsed = datetime.fromisoformat(as_of)
+    parsed = parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+    return AnalysisContext(as_of=parsed, capture_policy="live", clock=clock)
+
+
 @app.command()
 def analyze(
     symbol: str = typer.Argument(..., help="股票代码，如 AAPL"),
@@ -30,6 +45,9 @@ def analyze(
     max_tokens: int | None = typer.Option(None, "--max-tokens", help="覆盖最大输出 tokens"),
     output: str | None = typer.Option(None, "--output", "-o", help="把报告导出为 markdown 文件"),
     config_path: str | None = typer.Option(None, "--config", help="指定 config.toml 路径"),
+    as_of: str | None = typer.Option(
+        None, "--as-of", help="以指定时间为分析基准（ISO 格式，默认当前时间）"
+    ),
 ) -> None:
     """分析单只股票。"""
     config = load_config(config_path)
@@ -48,10 +66,13 @@ def analyze(
     if max_tokens is not None:
         overrides["max_tokens"] = max_tokens
 
+    context = _make_context(as_of)
     orch = Orchestrator(config)
     try:
         with console.status(f"正在分析 {symbol} ……"):
-            verdict = orch.analyze(symbol, deep=deep, model_override=model, **overrides)
+            verdict = orch.analyze(
+                symbol, context=context, deep=deep, model_override=model, **overrides
+            )
     except BellwetherError as exc:  # 重试与降级仍未成功 → 明示失败（D2），不落半截报告
         console.print(f"[red]分析失败[/red]（{type(exc).__name__}）：{redact(str(exc))}")
         console.print("[dim]已按类型重试/降级仍失败；可稍后重试，或用 --model 指定其他模型。[/dim]")
@@ -179,14 +200,23 @@ def snapshot(
     smoke: bool = typer.Option(False, "--smoke", help="冒烟模式：每市场只抓前 3 只"),
     delay: float = typer.Option(0.7, "--delay", help="标的间隔秒数（礼貌限流）"),
     golden: str | None = typer.Option(None, "--golden", help="自定义黄金集 toml 路径"),
+    as_of: str | None = typer.Option(
+        None, "--as-of", help="以指定时间为快照分区基准（ISO 格式，默认当前时间）"
+    ),
 ) -> None:
     """A0 每日原始快照：黄金集行情/基本面/新闻落盘 + manifest（不调用 LLM，不需要 API key）。"""
     from .snapshot import exit_code_for, run_snapshot
 
+    context = _make_context(as_of)
     market_list = [m.strip() for m in markets.split(",")] if markets else None
     with console.status("正在快照黄金集 ……"):
         manifest = run_snapshot(
-            root, markets=market_list, smoke=smoke, delay=delay, golden_path=golden
+            root,
+            context=context,
+            markets=market_list,
+            smoke=smoke,
+            delay=delay,
+            golden_path=golden,
         )
 
     total, failed = len(manifest["entries"]), len(manifest["failures"])
@@ -214,15 +244,19 @@ def portfolio(
     symbols: list[str] = typer.Argument(..., help="多只股票代码，如 AAPL MSFT 600519"),  # noqa: B008
     period: str = typer.Option("1y", "--period", help="回溯区间，如 6mo / 1y"),
     config_path: str | None = typer.Option(None, "--config", help="指定 config.toml 路径"),
+    as_of: str | None = typer.Option(
+        None, "--as-of", help="以指定时间为组合分析基准（ISO 格式，默认当前时间）"
+    ),
 ) -> None:
     """多只股票的组合/风险分析（相关性/波动率/回撤/集中度，确定性指标，不经 LLM）。"""
     config = load_config(config_path)
     from .analysis.portfolio import PortfolioModule
     from .report import render_portfolio
 
+    context = _make_context(as_of)
     try:
         with console.status("正在计算组合指标 ……"):
-            report = PortfolioModule().compute(symbols, period=period)
+            report = PortfolioModule().compute(symbols, period=period, context=context)
     except (BellwetherError, ValueError) as exc:
         # ValueError：PortfolioModule 的输入校验（标的太少/共同交易日不足）——
         # 同样呈现为友好失败而非裸 traceback

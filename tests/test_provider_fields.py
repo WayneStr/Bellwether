@@ -13,7 +13,7 @@ class _FakeTickerInfo:
         self.info = info
 
 
-def test_yfinance_get_fundamentals_maps_fields(monkeypatch):
+def test_yfinance_get_fundamentals_maps_fields(monkeypatch, ctx):
     info = {
         "shortName": "Apple Inc.",
         "currency": "USD",
@@ -35,7 +35,7 @@ def test_yfinance_get_fundamentals_maps_fields(monkeypatch):
     monkeypatch.setattr(
         "bellwether.data.yfinance_provider.yf.Ticker", lambda symbol: _FakeTickerInfo(info)
     )
-    fund = YFinanceProvider().get_fundamentals("AAPL")
+    fund = YFinanceProvider().get_fundamentals("AAPL", context=ctx)
     assert fund.symbol == "AAPL"
     assert fund.name == "Apple Inc."
     assert fund.currency == "USD"
@@ -56,13 +56,13 @@ def test_yfinance_get_fundamentals_maps_fields(monkeypatch):
     assert fund.source == "yfinance"
 
 
-def test_yfinance_get_fundamentals_missing_info_returns_shell(monkeypatch):
+def test_yfinance_get_fundamentals_missing_info_returns_shell(monkeypatch, ctx):
     for info in (None, {}):
         monkeypatch.setattr(
             "bellwether.data.yfinance_provider.yf.Ticker",
             lambda symbol, _info=info: _FakeTickerInfo(_info),
         )
-        fund = YFinanceProvider().get_fundamentals("AAPL")
+        fund = YFinanceProvider().get_fundamentals("AAPL", context=ctx)
         assert fund.symbol == "AAPL"
         assert fund.name is None
         assert fund.market_cap is None
@@ -71,7 +71,7 @@ def test_yfinance_get_fundamentals_missing_info_returns_shell(monkeypatch):
 
 
 # ─────────────────────────── yfinance：get_news ───────────────────────────
-def test_yfinance_get_news_parses_nested_content_and_skips_missing_title(monkeypatch):
+def test_yfinance_get_news_parses_nested_content_and_skips_missing_title(monkeypatch, ctx):
     raw = [
         {
             "content": {
@@ -89,7 +89,7 @@ def test_yfinance_get_news_parses_nested_content_and_skips_missing_title(monkeyp
             self.news = raw
 
     monkeypatch.setattr("bellwether.data.yfinance_provider.yf.Ticker", _FakeTickerNews)
-    items = YFinanceProvider().get_news("AAPL", limit=10)
+    items = YFinanceProvider().get_news("AAPL", limit=10, context=ctx)
     assert len(items) == 1
     assert items[0].title == "苹果创新高"
     assert items[0].url == "http://example.com/a"
@@ -98,7 +98,7 @@ def test_yfinance_get_news_parses_nested_content_and_skips_missing_title(monkeyp
 
 
 # ─────────────────────────── akshare CN：get_fundamentals ───────────────────────────
-def test_akshare_cn_get_fundamentals_parses_indicator(monkeypatch):
+def test_akshare_cn_get_fundamentals_parses_indicator(monkeypatch, ctx):
     akshare = pytest.importorskip("akshare")
 
     def fake_indicator(**kwargs):
@@ -107,7 +107,7 @@ def test_akshare_cn_get_fundamentals_parses_indicator(monkeypatch):
     # raising=False：本机装的 akshare 版本已不带 stock_a_indicator_lg 属性，
     # 这里只验证「给定该接口标准返回，解析正确」，不依赖它在当前版本真实存在。
     monkeypatch.setattr(akshare, "stock_a_indicator_lg", fake_indicator, raising=False)
-    fund = AkshareCNProvider().get_fundamentals("600519")
+    fund = AkshareCNProvider().get_fundamentals("600519", context=ctx)
     assert fund.symbol == "600519"
     assert fund.currency == "CNY"
     assert fund.pe == 12.5
@@ -116,14 +116,14 @@ def test_akshare_cn_get_fundamentals_parses_indicator(monkeypatch):
     assert fund.source == "akshare"
 
 
-def test_akshare_cn_get_fundamentals_exception_leaves_blank(monkeypatch):
+def test_akshare_cn_get_fundamentals_exception_leaves_blank(monkeypatch, ctx):
     akshare = pytest.importorskip("akshare")
 
     def boom(**kwargs):
         raise RuntimeError("估值接口不稳")
 
     monkeypatch.setattr(akshare, "stock_a_indicator_lg", boom, raising=False)
-    fund = AkshareCNProvider().get_fundamentals("600519")
+    fund = AkshareCNProvider().get_fundamentals("600519", context=ctx)
     assert fund.pe is None
     assert fund.pb is None
     assert fund.ps is None
@@ -131,8 +131,8 @@ def test_akshare_cn_get_fundamentals_exception_leaves_blank(monkeypatch):
 
 
 # ─────────────────────────── akshare HK：get_fundamentals ───────────────────────────
-def test_akshare_hk_get_fundamentals_returns_shell():
-    fund = AkshareHKProvider().get_fundamentals("00700")
+def test_akshare_hk_get_fundamentals_returns_shell(ctx):
+    fund = AkshareHKProvider().get_fundamentals("00700", context=ctx)
     assert fund.symbol == "00700"
     assert fund.currency == "HKD"
     assert fund.pe is None

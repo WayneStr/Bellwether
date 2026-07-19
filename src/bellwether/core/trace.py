@@ -13,15 +13,16 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from .context import AnalysisContext
 from .redact import redact
 
 DEFAULT_TRACE_ROOT = Path.home() / ".bellwether" / "traces"
-TRACE_VERSION = 1
+TRACE_VERSION = 2
 
 
 class ToolCallRecord(BaseModel):
@@ -39,6 +40,8 @@ class AnalysisTrace(BaseModel):
     trace_version: int = TRACE_VERSION
     trace_id: str
     created_at: datetime
+    as_of: datetime
+    capture_policy: str
     symbol: str
     deep: bool
     input_hash: str
@@ -57,13 +60,17 @@ def prompt_version(system_prompt: str) -> str:
     return hashlib.sha256(system_prompt.encode()).hexdigest()[:12]
 
 
-def new_trace(symbol: str, deep: bool, model_chain: list[str], prompt_ver: str) -> AnalysisTrace:
+def new_trace(
+    symbol: str, deep: bool, model_chain: list[str], prompt_ver: str, context: AnalysisContext
+) -> AnalysisTrace:
     input_hash = hashlib.sha256(
         f"{symbol}|{deep}|{prompt_ver}|{','.join(model_chain)}".encode()
     ).hexdigest()[:16]
     return AnalysisTrace(
         trace_id=uuid.uuid4().hex,
-        created_at=datetime.now(UTC),
+        created_at=context.clock.now(),
+        as_of=context.as_of,
+        capture_policy=context.capture_policy,
         symbol=symbol,
         deep=deep,
         input_hash=input_hash,

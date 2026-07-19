@@ -20,6 +20,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from .core.context import AnalysisContext
 from .data.base import ProviderRegistry
 
 # v3: run-id 不可变目录（{root}/{date}/run-<HHMMSS>-<4位hex>/，同日多次运行不覆盖，
@@ -83,6 +84,7 @@ def snapshot_symbol(
     market: str,
     run_dir: Path,
     *,
+    context: AnalysisContext,
     lookback_days: int = LOOKBACK_DAYS,
     intra_delay: float = 0.0,
 ) -> dict:
@@ -107,12 +109,12 @@ def snapshot_symbol(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     provider = ProviderRegistry.for_market(market)
-    sym = provider.resolve_symbol(symbol)
-    end = datetime.now(UTC).date()
+    sym = provider.resolve_symbol(symbol, context=context)
+    end = context.as_of.date()
     start = end - timedelta(days=lookback_days)
 
     try:
-        df = provider.get_ohlcv(sym, start, end)
+        df = provider.get_ohlcv(sym, start, end, context=context)
         fp = out_dir / "ohlcv.csv"
         df.to_csv(fp)
         entry["files"]["ohlcv"] = _file_meta(fp, run_dir, rows=len(df), adjust="default")
@@ -123,7 +125,7 @@ def snapshot_symbol(
         time.sleep(intra_delay)
     try:
         # 事实层：不复权原始价（复权视图会因未来分红/送转全序列重写，只有 raw 不可重写）
-        df_raw = provider.get_ohlcv(sym, start, end, adjust="raw")
+        df_raw = provider.get_ohlcv(sym, start, end, adjust="raw", context=context)
         fp = out_dir / "ohlcv_raw.csv"
         df_raw.to_csv(fp)
         entry["files"]["ohlcv_raw"] = _file_meta(fp, run_dir, rows=len(df_raw), adjust="raw")
@@ -131,7 +133,7 @@ def snapshot_symbol(
         entry["errors"]["ohlcv_raw"] = str(exc)
 
     try:
-        fund = provider.get_fundamentals(sym)
+        fund = provider.get_fundamentals(sym, context=context)
         fp = out_dir / "fundamentals.json"
         fp.write_text(fund.model_dump_json(indent=2), encoding="utf-8")
         entry["files"]["fundamentals"] = _file_meta(fp, run_dir)
@@ -139,7 +141,7 @@ def snapshot_symbol(
         entry["errors"]["fundamentals"] = str(exc)
 
     try:
-        news = provider.get_news(sym, 20)
+        news = provider.get_news(sym, 20, context=context)
         fp = out_dir / "news.json"
         fp.write_text(
             json.dumps([n.model_dump(mode="json") for n in news], ensure_ascii=False, indent=2),
@@ -155,13 +157,18 @@ def snapshot_symbol(
 def run_snapshot(
     root: str | Path | None = None,
     *,
+    context: AnalysisContext,
     markets: list[str] | None = None,
     smoke: bool = False,
     delay: float = 0.7,
     golden_path: str | Path | None = None,
     date_str: str | None = None,
 ) -> dict:
-    """执行一次快照，返回 manifest（同时写盘 manifest.json 与根级 last_status.json）。"""
+    """执行一次快照，返回 manifest（同时写盘 manifest.json 与根级 last_status.json）。
+
+    date_str：显式兼容覆盖（优先于 context.as_of 的分区日），记录进 manifest.date_override
+    以便留痕（spec-002 §4）。
+    """
     root_dir = Path(root) if root else DEFAULT_ROOT
     universe = load_golden_set(golden_path)
     if markets:
@@ -170,16 +177,17 @@ def run_snapshot(
     if smoke:
         universe = {m: syms[:SMOKE_PER_MARKET] for m, syms in universe.items()}
 
-    day = date_str or datetime.now(UTC).strftime("%Y-%m-%d")
-    run_id = f"run-{datetime.now(UTC).strftime('%H%M%S')}-{secrets.token_hex(2)}"
+    day = date_str or context.as_of.date().isoformat()
+    run_id = f"run-{context.clock.now().strftime('%H%M%S')}-{secrets.token_hex(2)}"
     run_dir = root_dir / day / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
     manifest: dict = {
         "schema_version": SCHEMA_VERSION,
         "date": day,
+        "date_override": date_str,
         "run_id": run_id,
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_at": context.clock.now().isoformat(),
         "smoke": smoke,
         "provider_versions": _provider_versions(),
         "license_tag": LICENSE_TAG,
@@ -189,7 +197,9 @@ def run_snapshot(
 
     for market, syms in universe.items():
         for symbol in syms:
-            entry = snapshot_symbol(symbol, market, run_dir, intra_delay=min(delay, 0.6))
+            entry = snapshot_symbol(
+                symbol, market, run_dir, context=context, intra_delay=min(delay, 0.6)
+            )
             key = f"{market}:{symbol}"
             manifest["entries"][key] = entry
             if entry["errors"]:
@@ -212,6 +222,7 @@ def run_snapshot(
                     "date": day,
                     "run_id": run_id,
                     "run_path": str(run_dir.relative_to(root_dir)),
+                    # spec-002 §4 白名单：运营完成戳，非回放输入，直连系统时间
                     "finished_at": datetime.now(UTC).isoformat(),
                     "total": total,
                     "failed": failed,

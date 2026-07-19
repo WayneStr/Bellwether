@@ -180,7 +180,7 @@ def test_resolve_chain_dedupes_repeated_models():
 
 
 # ─────────────────────────── orchestrator 端到端降级 ───────────────────────────
-def test_orchestrator_degradation_is_disclosed(monkeypatch):
+def test_orchestrator_degradation_is_disclosed(monkeypatch, ctx):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     from bellwether.agent.orchestrator import Orchestrator
     from bellwether.config import AppConfig
@@ -189,13 +189,13 @@ def test_orchestrator_degradation_is_disclosed(monkeypatch):
     fake = FakeClient([_api_error(anthropic.NotFoundError, 404), _EndTurn("最终研判")])
     orch.llm = ResilientLLM(fake)
 
-    report = orch.analyze("AAPL", deep=True)
+    report = orch.analyze("AAPL", deep=True, context=ctx)
     assert "最终研判" in report
     assert "模型降级说明" in report  # 降级必须明示，不得静默
     assert AppConfig().models.synthesis.model in report
 
 
-def test_orchestrator_no_disclosure_without_degradation(monkeypatch):
+def test_orchestrator_no_disclosure_without_degradation(monkeypatch, ctx):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     from bellwether.agent.orchestrator import Orchestrator
     from bellwether.config import AppConfig
@@ -203,6 +203,6 @@ def test_orchestrator_no_disclosure_without_degradation(monkeypatch):
     orch = Orchestrator(AppConfig())
     orch.llm = ResilientLLM(FakeClient([_EndTurn("正常研判")]))
 
-    report = orch.analyze("AAPL")
+    report = orch.analyze("AAPL", context=ctx)
     assert "正常研判" in report
     assert "模型降级说明" not in report

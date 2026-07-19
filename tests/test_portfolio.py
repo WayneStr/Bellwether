@@ -11,23 +11,23 @@ def _fake_provider(series: pd.Series):
     class _P:
         source = "fake"
 
-        def resolve_symbol(self, query):
+        def resolve_symbol(self, query, context=None):
             return query.upper()
 
-        def get_ohlcv(self, symbol, start, end, interval="1d"):
+        def get_ohlcv(self, symbol, start, end, interval="1d", context=None):
             return pd.DataFrame({"close": series}, index=series.index)
 
     return _P()
 
 
-def test_portfolio_perfectly_correlated():
+def test_portfolio_perfectly_correlated(ctx):
     idx = pd.date_range("2025-01-01", periods=120, freq="D")
     a = pd.Series(np.linspace(100, 200, 120), index=idx)
     b = pd.Series(np.linspace(50, 100, 120), index=idx)  # b = a/2 → 完全正相关
     providers = {"A": _fake_provider(a), "B": _fake_provider(b)}
 
     r = PortfolioModule().compute(
-        ["A", "B"], period="6mo", provider_for=lambda s: providers[s.upper()]
+        ["A", "B"], period="6mo", provider_for=lambda s: providers[s.upper()], context=ctx
     )
     assert r.symbols == ["A", "B"]
     assert r.weights == {"A": 0.5, "B": 0.5}  # 默认等权
@@ -36,7 +36,7 @@ def test_portfolio_perfectly_correlated():
     assert r.common_days == 120
 
 
-def test_portfolio_custom_weights_and_drawdown():
+def test_portfolio_custom_weights_and_drawdown(ctx):
     idx = pd.date_range("2025-01-01", periods=60, freq="D")
     a = pd.Series(np.linspace(100, 120, 60), index=idx)
     b = pd.Series(np.linspace(100, 90, 60), index=idx)  # 单调下跌
@@ -47,12 +47,13 @@ def test_portfolio_custom_weights_and_drawdown():
         period="3mo",
         weights={"A": 3, "B": 1},
         provider_for=lambda s: providers[s.upper()],
+        context=ctx,
     )
     assert r.weights == {"A": 0.75, "B": 0.25}  # 3:1 归一化
     assert r.concentration_hhi == round(0.75**2 + 0.25**2, 4)  # 0.625
     assert r.max_drawdowns["B"] < 0  # 单调下跌，回撤为负
 
 
-def test_portfolio_needs_two_symbols():
+def test_portfolio_needs_two_symbols(ctx):
     with pytest.raises(ValueError):
-        PortfolioModule().compute(["A"])
+        PortfolioModule().compute(["A"], context=ctx)

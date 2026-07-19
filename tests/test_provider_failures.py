@@ -58,7 +58,7 @@ def _patch_cn(monkeypatch, akshare, hist, daily):
     )
 
 
-def test_cn_empty_both_sides_not_retried(monkeypatch):
+def test_cn_empty_both_sides_not_retried(monkeypatch, ctx):
     akshare = pytest.importorskip("akshare")
     from bellwether.data.akshare_provider import AkshareCNProvider
 
@@ -74,12 +74,12 @@ def test_cn_empty_both_sides_not_retried(monkeypatch):
 
     _patch_cn(monkeypatch, akshare, empty_hist, empty_daily)
     with pytest.raises(DataUnavailableError):
-        AkshareCNProvider().get_ohlcv("600519", _START, _END)
+        AkshareCNProvider().get_ohlcv("600519", _START, _END, context=ctx)
     # 空数据不可重试：两源各只被调一次，不做无意义退避
     assert calls == {"em": 1, "sina": 1}
 
 
-def test_cn_connection_failures_retried_then_typed(monkeypatch):
+def test_cn_connection_failures_retried_then_typed(monkeypatch, ctx):
     akshare = pytest.importorskip("akshare")
     from bellwether.data.akshare_provider import AkshareCNProvider
 
@@ -95,12 +95,12 @@ def test_cn_connection_failures_retried_then_typed(monkeypatch):
 
     _patch_cn(monkeypatch, akshare, down_hist, down_daily)
     with pytest.raises(RateLimitError):
-        AkshareCNProvider().get_ohlcv("600519", _START, _END)
+        AkshareCNProvider().get_ohlcv("600519", _START, _END, context=ctx)
     # 连接类可重试：整链退避重试 4 次（datasource_retry），每轮两源各试一次
     assert calls == {"em": 4, "sina": 4}
 
 
-def test_cn_eastmoney_circuit_opens_and_skips(monkeypatch):
+def test_cn_eastmoney_circuit_opens_and_skips(monkeypatch, ctx):
     akshare = pytest.importorskip("akshare")
     from bellwether.data.akshare_provider import AkshareCNProvider
 
@@ -119,13 +119,13 @@ def test_cn_eastmoney_circuit_opens_and_skips(monkeypatch):
 
     # 前 5 次：东财失败→新浪成功（每次东财失败计入熔断），结果始终可用
     for _ in range(5):
-        df = provider.get_ohlcv("600519", _START, _END)
+        df = provider.get_ohlcv("600519", _START, _END, context=ctx)
         assert len(df) == 2
     assert calls == {"em": 5, "sina": 5}
 
     # 阈值已到（默认 5）：东财熔断打开，后续直接走新浪，不再白等东财
     for _ in range(3):
-        df = provider.get_ohlcv("600519", _START, _END)
+        df = provider.get_ohlcv("600519", _START, _END, context=ctx)
         assert len(df) == 2
     assert calls["em"] == 5  # 东财不再被调用
     assert calls["sina"] == 8
@@ -157,16 +157,16 @@ def fake_yf(monkeypatch):
     return _FakeTicker
 
 
-def test_yf_empty_is_unavailable_no_retry(fake_yf):
+def test_yf_empty_is_unavailable_no_retry(fake_yf, ctx):
     from bellwether.data.yfinance_provider import YFinanceProvider
 
     fake_yf.behavior = staticmethod(lambda **kw: pd.DataFrame())
     with pytest.raises(DataUnavailableError):
-        YFinanceProvider().get_ohlcv("AAPL", _START, _END)
+        YFinanceProvider().get_ohlcv("AAPL", _START, _END, context=ctx)
     assert fake_yf.calls == 1  # 空数据不重试
 
 
-def test_yf_connection_error_retried_then_typed(fake_yf):
+def test_yf_connection_error_retried_then_typed(fake_yf, ctx):
     from bellwether.data.yfinance_provider import YFinanceProvider
 
     def boom(**kw):
@@ -174,11 +174,11 @@ def test_yf_connection_error_retried_then_typed(fake_yf):
 
     fake_yf.behavior = staticmethod(boom)
     with pytest.raises(RateLimitError):
-        YFinanceProvider().get_ohlcv("AAPL", _START, _END)
+        YFinanceProvider().get_ohlcv("AAPL", _START, _END, context=ctx)
     assert fake_yf.calls == 4  # 退避重试 4 次后类型化上抛
 
 
-def test_yf_typed_errors_are_bellwether(fake_yf):
+def test_yf_typed_errors_are_bellwether(fake_yf, ctx):
     """所有对外抛出的失败都应是 BellwetherError 家族（调用方按类型决策）。"""
     from bellwether.data.yfinance_provider import YFinanceProvider
 
@@ -187,4 +187,4 @@ def test_yf_typed_errors_are_bellwether(fake_yf):
 
     fake_yf.behavior = staticmethod(boom)
     with pytest.raises(BellwetherError):
-        YFinanceProvider().get_ohlcv("AAPL", _START, _END)
+        YFinanceProvider().get_ohlcv("AAPL", _START, _END, context=ctx)

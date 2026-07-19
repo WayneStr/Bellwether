@@ -10,7 +10,7 @@ class _FakeProvider:
 
     source = "fake"
 
-    def get_ohlcv(self, symbol, start, end, interval="1d"):
+    def get_ohlcv(self, symbol, start, end, interval="1d", context=None):
         idx = pd.date_range("2025-01-01", periods=60, freq="D")
         close = pd.Series(range(100, 160), index=idx, dtype=float)
         return pd.DataFrame(
@@ -19,8 +19,8 @@ class _FakeProvider:
         )
 
 
-def test_technical_compute_basic():
-    report = TechnicalModule().compute("TEST", _FakeProvider(), period="3mo")
+def test_technical_compute_basic(ctx):
+    report = TechnicalModule().compute("TEST", _FakeProvider(), period="3mo", context=ctx)
     assert report.symbol == "TEST"
     assert report.last_close == 159.0
     assert report.source == "fake"
@@ -29,8 +29,8 @@ def test_technical_compute_basic():
     assert report.data_asof == "2025-03-01"  # 第 60 天
 
 
-def test_technical_signals_are_neutral_descriptions():
-    report = TechnicalModule().compute("TEST", _FakeProvider(), period="3mo")
+def test_technical_signals_are_neutral_descriptions(ctx):
+    report = TechnicalModule().compute("TEST", _FakeProvider(), period="3mo", context=ctx)
     joined = " ".join(report.signals)
     assert "多头排列" in joined  # MA20 > MA50 且上涨
     # 中性描述里不应出现买卖指令字样

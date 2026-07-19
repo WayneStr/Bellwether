@@ -13,7 +13,7 @@ from bellwether.data.akshare_provider import AkshareCNProvider, AkshareHKProvide
 from bellwether.data.base import ProviderRegistry
 
 
-def test_akshare_cn_ohlcv_parsing(monkeypatch):
+def test_akshare_cn_ohlcv_parsing(monkeypatch, ctx):
     akshare = pytest.importorskip("akshare")
 
     def fake_hist(**kwargs):
@@ -35,14 +35,14 @@ def test_akshare_cn_ohlcv_parsing(monkeypatch):
         lambda key, ttl, loader: loader(),
     )
 
-    df = AkshareCNProvider().get_ohlcv("600519", date(2026, 1, 1), date(2026, 1, 7))
+    df = AkshareCNProvider().get_ohlcv("600519", date(2026, 1, 1), date(2026, 1, 7), context=ctx)
     assert list(df.columns) == ["open", "high", "low", "close", "volume"]
     assert df["close"].iloc[-1] == 1730.0
     assert str(df.index[-1].date()) == "2026-01-06"
     assert len(df) == 3
 
 
-def test_cn_kline_falls_back_to_sina(monkeypatch):
+def test_cn_kline_falls_back_to_sina(monkeypatch, ctx):
     akshare = pytest.importorskip("akshare")
 
     def fake_hist(**kwargs):
@@ -71,7 +71,7 @@ def test_cn_kline_falls_back_to_sina(monkeypatch):
         lambda key, ttl, loader: loader(),
     )
 
-    df = AkshareCNProvider().get_ohlcv("600519", date(2026, 1, 1), date(2026, 1, 7))
+    df = AkshareCNProvider().get_ohlcv("600519", date(2026, 1, 1), date(2026, 1, 7), context=ctx)
     assert list(df.columns) == ["open", "high", "low", "close", "volume"]
     assert len(df) == 3
     assert df["close"].iloc[-1] == 1730.0
@@ -105,7 +105,7 @@ def test_cn_sina_prefix(monkeypatch):
     assert calls == ["sz000001", "sz300750", "sh600036"]
 
 
-def test_cn_both_sources_fail(monkeypatch):
+def test_cn_both_sources_fail(monkeypatch, ctx):
     akshare = pytest.importorskip("akshare")
 
     def fake_hist(**kwargs):
@@ -125,13 +125,13 @@ def test_cn_both_sources_fail(monkeypatch):
     from bellwether.core.exceptions import RateLimitError
 
     with pytest.raises(RateLimitError) as exc_info:
-        AkshareCNProvider().get_ohlcv("600519", date(2026, 1, 1), date(2026, 1, 7))
+        AkshareCNProvider().get_ohlcv("600519", date(2026, 1, 1), date(2026, 1, 7), context=ctx)
     msg = str(exc_info.value)
     assert "em 挂了" in msg
     assert "sina 也挂了" in msg
 
 
-def test_akshare_hk_ohlcv_parsing(monkeypatch):
+def test_akshare_hk_ohlcv_parsing(monkeypatch, ctx):
     akshare = pytest.importorskip("akshare")
 
     def fake_hk_daily(**kwargs):
@@ -154,7 +154,7 @@ def test_akshare_hk_ohlcv_parsing(monkeypatch):
         lambda key, ttl, loader: loader(),
     )
 
-    df = AkshareHKProvider().get_ohlcv("00700", date(2026, 1, 1), date(2026, 1, 7))
+    df = AkshareHKProvider().get_ohlcv("00700", date(2026, 1, 1), date(2026, 1, 7), context=ctx)
     assert list(df.columns) == ["open", "high", "low", "close", "volume"]
     assert df["close"].iloc[-1] == 515.0
     assert "amount" not in df.columns  # 多余列被丢弃
@@ -200,7 +200,7 @@ def test_eastmoney_bypasses_proxy(monkeypatch):
     assert "localhost" in os.environ["NO_PROXY"] and "eastmoney.com" in os.environ["NO_PROXY"]
 
 
-def test_akshare_cn_news_parsing(monkeypatch):
+def test_akshare_cn_news_parsing(monkeypatch, ctx):
     akshare = pytest.importorskip("akshare")
 
     def fake_news(**kwargs):
@@ -216,14 +216,14 @@ def test_akshare_cn_news_parsing(monkeypatch):
         )
 
     monkeypatch.setattr(akshare, "stock_news_em", fake_news)
-    items = AkshareCNProvider().get_news("600519", limit=5)
+    items = AkshareCNProvider().get_news("600519", limit=5, context=ctx)
     assert len(items) == 2
     assert items[0].title == "白酒板块飘红"
     assert items[0].published_at is not None
     assert items[0].url == "http://x"
 
 
-def test_akshare_hk_news_parsing(monkeypatch):
+def test_akshare_hk_news_parsing(monkeypatch, ctx):
     akshare = pytest.importorskip("akshare")
 
     def fake_news(**kwargs):
@@ -239,6 +239,6 @@ def test_akshare_hk_news_parsing(monkeypatch):
         )
 
     monkeypatch.setattr(akshare, "stock_news_em", fake_news)
-    items = AkshareHKProvider().get_news("00700", limit=5)
+    items = AkshareHKProvider().get_news("00700", limit=5, context=ctx)
     assert len(items) == 1
     assert items[0].title == "腾讯控股连续回购"

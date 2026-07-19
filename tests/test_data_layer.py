@@ -32,7 +32,7 @@ def test_period_to_start():
     assert (end - _period_to_start("10d", end)).days == 10
 
 
-def test_summarize_ohlcv():
+def test_summarize_ohlcv(ctx):
     idx = pd.to_datetime(["2026-01-02", "2026-01-03", "2026-01-06"])
     df = pd.DataFrame(
         {
@@ -44,7 +44,7 @@ def test_summarize_ohlcv():
         },
         index=idx,
     )
-    summary = _summarize_ohlcv(df, "TEST", "1d", "unit", recent=2)
+    summary = _summarize_ohlcv(df, "TEST", "1d", "unit", recent=2, context=ctx)
     assert summary.symbol == "TEST"
     assert summary.bars_count == 3
     assert summary.last_close == 4.0

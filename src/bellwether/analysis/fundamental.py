@@ -5,8 +5,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
+from ..core.context import AnalysisContext
 from ..data.base import MarketDataProvider
 from ..models import FundamentalReport
 from .valuation import DEFAULT_DCF, simple_dcf
@@ -18,8 +17,10 @@ def _pct(value: float | None) -> float | None:
 
 
 class FundamentalModule:
-    def compute(self, symbol: str, provider: MarketDataProvider) -> FundamentalReport:
-        d = provider.get_fundamentals(symbol)
+    def compute(
+        self, symbol: str, provider: MarketDataProvider, *, context: AnalysisContext
+    ) -> FundamentalReport:
+        d = provider.get_fundamentals(symbol, context=context)
 
         metrics: dict[str, float | None] = {
             "PE": d.pe,
@@ -50,6 +51,6 @@ class FundamentalModule:
             dcf_fair_value=round(fair, 2) if fair is not None else None,
             dcf_assumptions=dict(DEFAULT_DCF),
             dcf_note=note,
-            fetched_at=datetime.now(UTC),
+            fetched_at=context.clock.now(),
             source=d.source,
         )

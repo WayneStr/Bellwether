@@ -27,7 +27,7 @@ def _make_orchestrator(*, verdict="研判结论", trace_path=None, error=None):
             self.config = config
             self.last_trace_path = trace_path
 
-        def analyze(self, symbol, *, deep=False, model_override=None, **overrides):
+        def analyze(self, symbol, *, context=None, deep=False, model_override=None, **overrides):
             if error is not None:
                 raise error
             return verdict
@@ -175,7 +175,7 @@ def test_portfolio_success(monkeypatch, tmp_path):
     calls = []
 
     class _FakePortfolioModule:
-        def compute(self, symbols, period="1y"):
+        def compute(self, symbols, period="1y", context=None):
             return "FAKE_REPORT"
 
     def fake_render(report, *, show_disclaimer=True):
@@ -193,7 +193,7 @@ def test_portfolio_success(monkeypatch, tmp_path):
 
 def test_portfolio_bellwether_error_exits_1(monkeypatch, tmp_path):
     class _FailingPortfolioModule:
-        def compute(self, symbols, period="1y"):
+        def compute(self, symbols, period="1y", context=None):
             raise BellwetherError("组合分析失败")
 
     monkeypatch.setattr("bellwether.analysis.portfolio.PortfolioModule", _FailingPortfolioModule)
@@ -206,7 +206,7 @@ def test_portfolio_bellwether_error_exits_1(monkeypatch, tmp_path):
 def test_portfolio_value_error_exits_1(monkeypatch, tmp_path):
     # PortfolioModule 的输入校验抛裸 ValueError（标的太少等）→ 同样友好失败而非 traceback
     class _FailingPortfolioModule:
-        def compute(self, symbols, period="1y"):
+        def compute(self, symbols, period="1y", context=None):
             raise ValueError("组合分析至少需要 2 只标的")
 
     monkeypatch.setattr("bellwether.analysis.portfolio.PortfolioModule", _FailingPortfolioModule)
