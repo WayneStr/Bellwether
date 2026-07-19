@@ -26,6 +26,7 @@ def _make_orchestrator(*, verdict="研判结论", trace_path=None, error=None):
         def __init__(self, config):
             self.config = config
             self.last_trace_path = trace_path
+            self.last_report_path = None
 
         def analyze(self, symbol, *, context=None, deep=False, model_override=None, **overrides):
             if error is not None:

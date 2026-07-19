@@ -83,6 +83,8 @@ def analyze(
     render_analysis(symbol, verdict, show_disclaimer=config.report.disclaimer)
     if orch.last_trace_path:
         console.print(f"[dim]分析溯源已记录：{orch.last_trace_path}[/dim]")
+    if orch.last_report_path:
+        console.print(f"[dim]结构化报告（report.json）：{orch.last_report_path}[/dim]")
     if output:
         from .report import export_markdown
 

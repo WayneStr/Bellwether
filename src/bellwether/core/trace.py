@@ -66,6 +66,7 @@ class AnalysisTrace(BaseModel):
     # v3（M2-B0）：证据绑定表——R7 溯源解析与 R8 值重算的核验依据
     evidence_bindings: list[EvidenceBinding] = Field(default_factory=list)
     capture_root: str | None = None  # 本会话捕获库根目录（R7 解析入口）
+    dropped_claims: list[str] = Field(default_factory=list)  # 被剔除陈述的原因（P13 审计）
 
 
 def prompt_version(system_prompt: str) -> str:
@@ -99,6 +100,21 @@ def write_trace(trace: AnalysisTrace, root: Path | None = None) -> Path | None:
         base.mkdir(parents=True, exist_ok=True)
         path = base / f"{trace.trace_id}.json"
         path.write_text(redact(trace.model_dump_json(indent=2)), encoding="utf-8")
+        return path
+    except Exception:
+        return None
+
+
+def write_report_json(report, trace_id: str, root: Path | None = None) -> Path | None:
+    """report.json 落盘（spec-001 §1 的产物；仅 verify 通过的报告可到达此处）。
+
+    与 trace 同目录、文件名 <trace_id>-report.json；失败静默不阻塞。
+    """
+    try:
+        base = (root or DEFAULT_TRACE_ROOT) / report.meta.generated_at.strftime("%Y-%m-%d")
+        base.mkdir(parents=True, exist_ok=True)
+        path = base / f"{trace_id}-report.json"
+        path.write_text(redact(report.model_dump_json(indent=2)), encoding="utf-8")
         return path
     except Exception:
         return None

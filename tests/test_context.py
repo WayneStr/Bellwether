@@ -137,7 +137,9 @@ def test_context_identity_preserved_across_tool_calls(monkeypatch, ctx):
     from bellwether.config import AppConfig
 
     orch = Orchestrator(AppConfig())
-    orch.llm = ResilientLLM(_FakeClient([_tool_use_msg(), _tool_use_msg(), _end_turn_msg()]))
+    orch.llm = ResilientLLM(
+        _FakeClient([_tool_use_msg(), _tool_use_msg(), _end_turn_msg(), _end_turn_msg()])
+    )
     orch.analyze("AAPL", context=ctx)
 
     assert len(seen_contexts) == 2  # 两轮 tool_use

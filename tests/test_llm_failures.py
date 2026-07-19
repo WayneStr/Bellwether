@@ -186,7 +186,10 @@ def test_orchestrator_degradation_is_disclosed(monkeypatch, ctx):
     from bellwether.config import AppConfig
 
     orch = Orchestrator(AppConfig())
-    fake = FakeClient([_api_error(anthropic.NotFoundError, 404), _EndTurn("最终研判")])
+    # 文本终稿（未 submit）：force-submit 追问一轮后仍 end_turn → unstructured 回退
+    fake = FakeClient(
+        [_api_error(anthropic.NotFoundError, 404), _EndTurn("最终研判"), _EndTurn("最终研判")]
+    )
     orch.llm = ResilientLLM(fake)
 
     report = orch.analyze("AAPL", deep=True, context=ctx)
@@ -201,7 +204,7 @@ def test_orchestrator_no_disclosure_without_degradation(monkeypatch, ctx):
     from bellwether.config import AppConfig
 
     orch = Orchestrator(AppConfig())
-    orch.llm = ResilientLLM(FakeClient([_EndTurn("正常研判")]))
+    orch.llm = ResilientLLM(FakeClient([_EndTurn("正常研判"), _EndTurn("正常研判")]))
 
     report = orch.analyze("AAPL", context=ctx)
     assert "正常研判" in report

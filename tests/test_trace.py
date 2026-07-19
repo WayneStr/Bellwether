@@ -126,13 +126,14 @@ def _read_trace(orch):
 def test_trace_records_full_analysis(orch, ctx):
     from bellwether.agent.llm import ResilientLLM
 
-    orch.llm = ResilientLLM(FakeClient([_tool_use_msg(), _end_turn_msg()]))
+    # 文本终稿（mock 未 submit）：force-submit 追问后仍 end_turn → unstructured 回退
+    orch.llm = ResilientLLM(FakeClient([_tool_use_msg(), _end_turn_msg(), _end_turn_msg()]))
     orch.analyze("AAPL", context=ctx)
 
     data = _read_trace(orch)
-    assert data["outcome"] == "ok"
+    assert data["outcome"] == "unstructured"
     assert data["symbol"] == "AAPL" and data["deep"] is False
-    assert len(data["llm_calls"]) == 2
+    assert len(data["llm_calls"]) == 3
     assert data["llm_calls"][0]["stop_reason"] == "tool_use"
     assert data["tool_calls"] == [
         {"name": "get_price_history", "input": {"symbol": "AAPL"}, "output": '{"ok": true}'}
@@ -146,13 +147,15 @@ def test_trace_marks_degradation(orch, ctx):
     from bellwether.agent.llm import ResilientLLM
     from bellwether.config import AppConfig
 
-    orch.llm = ResilientLLM(FakeClient([_api_error(anthropic.NotFoundError, 404), _end_turn_msg()]))
+    orch.llm = ResilientLLM(
+        FakeClient([_api_error(anthropic.NotFoundError, 404), _end_turn_msg(), _end_turn_msg()])
+    )
     orch.analyze("AAPL", deep=True, context=ctx)
 
     data = _read_trace(orch)
     assert data["degraded"] is True
     assert data["final_model"] == AppConfig().models.synthesis.model
-    assert data["outcome"] == "ok"
+    assert data["outcome"] == "unstructured"
 
 
 def test_trace_written_on_total_failure(orch, ctx):

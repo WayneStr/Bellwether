@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -25,10 +26,13 @@ from ..core.trace import (
     ToolCallRecord,
     new_trace,
     prompt_version,
+    write_report_json,
     write_trace,
 )
 from ..data.base import MarketDataProvider, ProviderRegistry
+from ..ir.assemble import SUBMIT_REPORT_TOOL, assemble_report
 from ..ir.recorder import ToolRecorder
+from ..ir.render import render_report
 from ..ir.store import EvidenceStore
 from ..models import ModelSpec
 from . import tools as tools_mod
@@ -36,8 +40,19 @@ from .llm import ResilientLLM
 from .prompts import SYSTEM_PROMPT, analyze_prompt
 from .router import ModelRouter
 
-_MAX_TURNS = 6
+_MAX_TURNS = 10  # 取数轮 + submit/重写轮共用预算（M2 报告边界后从 6 提高）
+_MAX_SUBMIT_REJECTIONS = 2  # 违规重写机会；耗尽后 lenient 模式 drop 违规条目
 _LLM_TIMEOUT_SECONDS = 300.0  # deep 报告 8k tokens 生成可能超过默认值，显式给足
+
+
+def _data_types(recorder: ToolRecorder) -> set[str]:
+    """本会话已注册证据覆盖的数据类型（coverage 机械推导的输入）。"""
+    types: set[str] = set()
+    for binding in recorder.bindings:
+        evidence = recorder.evidence.get(binding.eid)
+        if evidence.source is not None:
+            types.add(evidence.source.data_type)
+    return types
 
 
 class Orchestrator:
@@ -52,6 +67,7 @@ class Orchestrator:
         )
         self.llm = ResilientLLM(self.client)
         self.last_trace_path: Path | None = None
+        self.last_report_path: Path | None = None
 
     def analyze(
         self,
@@ -98,15 +114,21 @@ class Orchestrator:
         recorder: ToolRecorder,
     ) -> str:
         primary_model = chain[0].model
+        role = "deep_report" if deep else "synthesis"
         messages: list[dict] = [{"role": "user", "content": analyze_prompt(symbol, deep)}]
+        tools = [*tools_mod.TOOL_SCHEMAS, SUBMIT_REPORT_TOOL]
+        submit_rejections = 0
+        force_submit = False
 
         for _ in range(_MAX_TURNS):
-            resp, used = self.llm.create(
-                chain,
-                system=SYSTEM_PROMPT,
-                tools=tools_mod.TOOL_SCHEMAS,
-                messages=messages,
-            )
+            create_kwargs: dict[str, Any] = {
+                "system": SYSTEM_PROMPT,
+                "tools": tools,
+                "messages": messages,
+            }
+            if force_submit:
+                create_kwargs["tool_choice"] = {"type": "tool", "name": "submit_report"}
+            resp, used = self.llm.create(chain, **create_kwargs)
             trace.llm_calls.append(LLMCallRecord(model=used.model, stop_reason=resp.stop_reason))
             trace.final_model = used.model
             # 降级后从降级档继续：之前的档已证明失败，后续轮次不再逐轮撞它
@@ -115,31 +137,104 @@ class Orchestrator:
                 chain = chain[chain.index(used) :]
 
             if resp.stop_reason != "tool_use":
-                trace.outcome = "ok"
-                return _finalize(_collect_text(resp), primary_model, used.model)
+                # 契约要求终稿必须经 submit_report 管道（spec-001 §1）：追加提醒并强制一轮
+                if not force_submit:
+                    force_submit = True
+                    messages.append({"role": "assistant", "content": resp.content})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": "请调用 submit_report 工具提交结构化终稿"
+                            "（数字一律用 [E12] 证据令牌）。",
+                        }
+                    )
+                    continue
+                trace.outcome = "unstructured"
+                text = _collect_text(resp) + (
+                    "\n\n> ⚠️ 本次输出未经构造性核验管道（模型未提交结构化报告），"
+                    "数字未经证据令牌核验。"
+                )
+                return _finalize(text, primary_model, used.model)
 
             messages.append({"role": "assistant", "content": resp.content})
             tool_results = []
+            submitted_report = None
             for block in resp.content:
-                if getattr(block, "type", None) == "tool_use":
-                    tool_name = block.name  # type: ignore[union-attr]
-                    tool_input = block.input  # type: ignore[union-attr]
-                    tool_use_id = block.id  # type: ignore[union-attr]
-                    recorder.current_tool_call_id = tool_use_id  # RFC-000 §6 tool_call_id
-                    output = tools_mod.execute_tool(
-                        tool_name, tool_input, provider, context=context, trace=recorder
+                if getattr(block, "type", None) != "tool_use":
+                    continue
+                tool_name = block.name  # type: ignore[union-attr]
+                tool_input = block.input  # type: ignore[union-attr]
+                tool_use_id = block.id  # type: ignore[union-attr]
+
+                if tool_name == "submit_report":
+                    lenient = submit_rejections >= _MAX_SUBMIT_REJECTIONS
+                    result = assemble_report(
+                        dict(tool_input),
+                        store=recorder.evidence,
+                        context=context,
+                        symbol=symbol,
+                        market=provider.market,
+                        tier="deep" if deep else "quick",
+                        model_versions={role: used.model},
+                        prompt_versions={"system": prompt_version(SYSTEM_PROMPT)},
+                        provenance_ref=trace.trace_id,
+                        data_types_present=_data_types(recorder),
+                        lenient=lenient,
+                    )
+                    outcome = (
+                        "accepted"
+                        if result.report is not None
+                        else f"rejected: {'; '.join(result.violations)}"
                     )
                     trace.tool_calls.append(
-                        ToolCallRecord(name=tool_name, input=dict(tool_input), output=output)
+                        ToolCallRecord(
+                            name="submit_report", input=dict(tool_input), output=outcome[:2000]
+                        )
                     )
+                    if result.report is None:
+                        submit_rejections += 1
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_use_id,
+                                "content": json.dumps(
+                                    {"status": "rejected", "violations": result.violations},
+                                    ensure_ascii=False,
+                                ),
+                            }
+                        )
+                        continue
+                    trace.dropped_claims = [
+                        f"{d['reason']}：{d['text'][:100]}" for d in result.dropped
+                    ]
+                    submitted_report = result.report
                     tool_results.append(
                         {
                             "type": "tool_result",
                             "tool_use_id": tool_use_id,
-                            "content": output,
+                            "content": '{"status": "accepted"}',
                         }
                     )
+                    continue
+
+                recorder.current_tool_call_id = tool_use_id  # RFC-000 §6 tool_call_id
+                output = tools_mod.execute_tool(
+                    tool_name, tool_input, provider, context=context, trace=recorder
+                )
+                trace.tool_calls.append(
+                    ToolCallRecord(name=tool_name, input=dict(tool_input), output=output)
+                )
+                tool_results.append(
+                    {"type": "tool_result", "tool_use_id": tool_use_id, "content": output}
+                )
+
             messages.append({"role": "user", "content": tool_results})
+            if submitted_report is not None:
+                trace.outcome = "ok"
+                self.last_report_path = write_report_json(submitted_report, trace.trace_id)
+                return _finalize(
+                    render_report(submitted_report), primary_model, trace.final_model or ""
+                )
 
         trace.outcome = "max_turns"
         return "（已达到最大工具调用轮次，未能得出最终研判。可稍后重试。）"
