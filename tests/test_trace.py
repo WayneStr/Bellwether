@@ -51,7 +51,7 @@ def test_write_trace_persists_and_redacts(tmp_path, monkeypatch, ctx):
     data = json.loads(text)
     assert data["symbol"] == "AAPL"
     assert data["tool_calls"][0]["name"] == "get_news"
-    assert data["snapshot_ref"] is None  # M1 恒 None，M2 证据层填充
+    assert data["evidence_bindings"] == []  # v3：绑定表默认空（trace 级 snapshot_ref 已废弃）
 
 
 def test_write_trace_failure_is_silent(tmp_path, ctx):
@@ -106,10 +106,11 @@ class FakeClient:
 def orch(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr("bellwether.core.trace.DEFAULT_TRACE_ROOT", tmp_path)
+    monkeypatch.setattr("bellwether.agent.orchestrator.DEFAULT_CAPTURE_ROOT", tmp_path / "cap")
     # tool 执行 mock 掉：这里测 trace 织入，不测 tool 本身（不打网）
     monkeypatch.setattr(
         "bellwether.agent.tools.execute_tool",
-        lambda name, tool_input, provider, *, context: '{"ok": true}',
+        lambda name, tool_input, provider, *, context, trace=None: '{"ok": true}',
     )
     from bellwether.agent.orchestrator import Orchestrator
     from bellwether.config import AppConfig

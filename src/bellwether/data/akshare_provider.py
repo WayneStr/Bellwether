@@ -181,19 +181,24 @@ class AkshareCNProvider(MarketDataProvider):
 
         def _load() -> pd.DataFrame:
             # 降级链：东财（主源，单源熔断）→ 新浪；东财熔断打开时直接走新浪不再白等。
+            # df.attrs 标注实际子源与真实捕获时刻（B9/B8）：缓存命中随 pickle 回填原值。
             try:
-                return call_source(
+                df = call_source(
                     breaker_for("eastmoney", "kline_cn"),
                     lambda: _load_cn_em(ak, code, start, end, ak_adjust),
                 )
+                df.attrs["upstream_source"] = "eastmoney"
             except BellwetherError as em_err:
                 try:
-                    return call_source(
+                    df = call_source(
                         breaker_for("sina", "kline_cn"),
                         lambda: _load_cn_sina(ak, code, start, end, ak_adjust),
                     )
+                    df.attrs["upstream_source"] = "sina"
                 except BellwetherError as sina_err:
                     raise _merge_chain_error(em_err, sina_err) from sina_err
+            df.attrs["captured_at"] = context.clock.now().isoformat()
+            return df
 
         return cached_dataframe(key, DEFAULT_TTL_DAYS, _load)
 
@@ -268,7 +273,10 @@ class AkshareHKProvider(MarketDataProvider):
             return df.reindex(columns=_OHLCV_COLS).dropna(subset=["open", "high", "low", "close"])
 
         def _load() -> pd.DataFrame:
-            return call_source(breaker_for("sina", "kline_hk"), _fetch)
+            df = call_source(breaker_for("sina", "kline_hk"), _fetch)
+            df.attrs["upstream_source"] = "sina"
+            df.attrs["captured_at"] = context.clock.now().isoformat()
+            return df
 
         return cached_dataframe(key, DEFAULT_TTL_DAYS, _load)
 

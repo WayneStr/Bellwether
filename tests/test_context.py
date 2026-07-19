@@ -126,7 +126,7 @@ def test_context_identity_preserved_across_tool_calls(monkeypatch, ctx):
 
     seen_contexts = []
 
-    def _fake_execute_tool(name, tool_input, provider, *, context):
+    def _fake_execute_tool(name, tool_input, provider, *, context, trace=None):
         seen_contexts.append(context)
         return '{"ok": true}'
 

@@ -22,7 +22,18 @@ from .context import AnalysisContext
 from .redact import redact
 
 DEFAULT_TRACE_ROOT = Path.home() / ".bellwether" / "traces"
-TRACE_VERSION = 2
+DEFAULT_CAPTURE_ROOT = Path.home() / ".bellwether" / "captures"
+TRACE_VERSION = 3
+
+
+class EvidenceBinding(BaseModel):
+    """eid ↔ 捕获 ↔ 抽取器的绑定记录（R7/R8 核验依据，随 trace 落盘）。"""
+
+    eid: str
+    capture_id: str
+    extractor_id: str
+    extractor_args: dict = Field(default_factory=dict)
+    fingerprint: str | None = None
 
 
 class ToolCallRecord(BaseModel):
@@ -52,7 +63,9 @@ class AnalysisTrace(BaseModel):
     degraded: bool = False
     final_model: str | None = None
     outcome: str = "incomplete"  # ok / max_turns / error:<ExcType>
-    snapshot_ref: str | None = None  # M1 恒 None（分析不走快照）；M2 证据层填充
+    # v3（M2-B0）：证据绑定表——R7 溯源解析与 R8 值重算的核验依据
+    evidence_bindings: list[EvidenceBinding] = Field(default_factory=list)
+    capture_root: str | None = None  # 本会话捕获库根目录（R7 解析入口）
 
 
 def prompt_version(system_prompt: str) -> str:

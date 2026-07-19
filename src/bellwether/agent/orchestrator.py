@@ -15,9 +15,11 @@ from anthropic import Anthropic
 from anthropic.types import Message
 
 from ..config import AppConfig
+from ..core.capture import CaptureStore
 from ..core.context import AnalysisContext
 from ..core.exceptions import BellwetherError
 from ..core.trace import (
+    DEFAULT_CAPTURE_ROOT,
     AnalysisTrace,
     LLMCallRecord,
     ToolCallRecord,
@@ -26,6 +28,8 @@ from ..core.trace import (
     write_trace,
 )
 from ..data.base import MarketDataProvider, ProviderRegistry
+from ..ir.recorder import ToolRecorder
+from ..ir.store import EvidenceStore
 from ..models import ModelSpec
 from . import tools as tools_mod
 from .llm import ResilientLLM
@@ -65,13 +69,22 @@ class Orchestrator:
         trace = new_trace(
             symbol, deep, [s.model for s in chain], prompt_version(SYSTEM_PROMPT), context
         )
+        # M2-B0：会话证据化基座——捕获库 + 证据库 + 记录器（bindings 随 trace 落盘）
+        capture_root = DEFAULT_CAPTURE_ROOT / trace.created_at.strftime("%Y-%m-%d") / trace.trace_id
+        recorder = ToolRecorder(
+            context=context,
+            evidence=EvidenceStore(symbol),
+            captures=CaptureStore(capture_root),
+        )
+        trace.capture_root = str(capture_root)
         self.last_trace_path = None
         try:
-            return self._run_loop(symbol, deep, provider, chain, trace, context)
+            return self._run_loop(symbol, deep, provider, chain, trace, context, recorder)
         except BellwetherError as exc:
             trace.outcome = f"error:{type(exc).__name__}"
             raise
         finally:
+            trace.evidence_bindings = recorder.bindings
             self.last_trace_path = write_trace(trace)
 
     def _run_loop(
@@ -82,6 +95,7 @@ class Orchestrator:
         chain: list[ModelSpec],
         trace: AnalysisTrace,
         context: AnalysisContext,
+        recorder: ToolRecorder,
     ) -> str:
         primary_model = chain[0].model
         messages: list[dict] = [{"role": "user", "content": analyze_prompt(symbol, deep)}]
@@ -111,8 +125,9 @@ class Orchestrator:
                     tool_name = block.name  # type: ignore[union-attr]
                     tool_input = block.input  # type: ignore[union-attr]
                     tool_use_id = block.id  # type: ignore[union-attr]
+                    recorder.current_tool_call_id = tool_use_id  # RFC-000 §6 tool_call_id
                     output = tools_mod.execute_tool(
-                        tool_name, tool_input, provider, context=context
+                        tool_name, tool_input, provider, context=context, trace=recorder
                     )
                     trace.tool_calls.append(
                         ToolCallRecord(name=tool_name, input=dict(tool_input), output=output)

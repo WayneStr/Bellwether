@@ -21,7 +21,10 @@ class FundamentalModule:
         self, symbol: str, provider: MarketDataProvider, *, context: AnalysisContext
     ) -> FundamentalReport:
         d = provider.get_fundamentals(symbol, context=context)
+        return self.build_report(symbol, d, context=context)
 
+    def build_report(self, symbol: str, d, *, context: AnalysisContext) -> FundamentalReport:
+        """以已取得的原始数据组装报告（tool 证据化路径复用，避免二次取数）。"""
         metrics: dict[str, float | None] = {
             "PE": d.pe,
             "PB": d.pb,

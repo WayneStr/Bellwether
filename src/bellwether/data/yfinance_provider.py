@@ -63,7 +63,10 @@ class YFinanceProvider(MarketDataProvider):
             return df
 
         def _load() -> pd.DataFrame:
-            return call_source(breaker_for("yfinance", "history"), _fetch)
+            df = call_source(breaker_for("yfinance", "history"), _fetch)
+            # 真实捕获时刻随数据走（B8）：缓存命中时经 pickle 回填原值，不被误标为今天
+            df.attrs["captured_at"] = context.clock.now().isoformat()
+            return df
 
         return cached_dataframe(key, DEFAULT_TTL_DAYS, _load)
 
