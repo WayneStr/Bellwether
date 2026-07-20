@@ -45,6 +45,9 @@ class ToolCallRecord(BaseModel):
 class LLMCallRecord(BaseModel):
     model: str
     stop_reason: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    latency_s: float | None = None
 
 
 class AnalysisTrace(BaseModel):
@@ -67,6 +70,7 @@ class AnalysisTrace(BaseModel):
     evidence_bindings: list[EvidenceBinding] = Field(default_factory=list)
     capture_root: str | None = None  # 本会话捕获库根目录（R7 解析入口）
     dropped_claims: list[str] = Field(default_factory=list)  # 被剔除陈述的原因（P13 审计）
+    cost: dict = Field(default_factory=dict)  # CostLedger.summary()（D3 成本记账）
 
 
 def prompt_version(system_prompt: str) -> str:

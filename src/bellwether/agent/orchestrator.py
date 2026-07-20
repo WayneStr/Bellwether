@@ -9,16 +9,19 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
+import structlog
 from anthropic import Anthropic
 from anthropic.types import Message
 
 from ..config import AppConfig
 from ..core.capture import CaptureStore
 from ..core.context import AnalysisContext
-from ..core.exceptions import BellwetherError
+from ..core.costs import CostLedger
+from ..core.exceptions import BellwetherError, BudgetExceededError
 from ..core.trace import (
     DEFAULT_CAPTURE_ROOT,
     AnalysisTrace,
@@ -44,6 +47,8 @@ _MAX_TURNS = 10  # 取数轮 + submit/重写轮共用预算（M2 报告边界后
 _MAX_SUBMIT_REJECTIONS = 2  # 违规重写机会；耗尽后 lenient 模式 drop 违规条目
 _LLM_TIMEOUT_SECONDS = 300.0  # deep 报告 8k tokens 生成可能超过默认值，显式给足
 
+_log = structlog.get_logger()
+
 
 def _data_types(recorder: ToolRecorder) -> set[str]:
     """本会话已注册证据覆盖的数据类型（coverage 机械推导的输入）。"""
@@ -68,6 +73,7 @@ class Orchestrator:
         self.llm = ResilientLLM(self.client)
         self.last_trace_path: Path | None = None
         self.last_report_path: Path | None = None
+        self.last_cost: dict | None = None
 
     def analyze(
         self,
@@ -95,13 +101,17 @@ class Orchestrator:
         )
         trace.capture_root = str(capture_root)
         self.last_trace_path = None
+        ledger = CostLedger(self.config.pricing)
         try:
-            return self._run_loop(symbol, deep, provider, chain, trace, context, recorder)
+            return self._run_loop(symbol, deep, provider, chain, trace, context, recorder, ledger)
         except BellwetherError as exc:
             trace.outcome = f"error:{type(exc).__name__}"
             raise
         finally:
             trace.evidence_bindings = recorder.bindings
+            summary = ledger.summary()
+            trace.cost = summary
+            self.last_cost = summary
             self.last_trace_path = write_trace(trace)
 
     def _run_loop(
@@ -113,9 +123,11 @@ class Orchestrator:
         trace: AnalysisTrace,
         context: AnalysisContext,
         recorder: ToolRecorder,
+        ledger: CostLedger,
     ) -> str:
         primary_model = chain[0].model
         role = "deep_report" if deep else "synthesis"
+        budget_usd = self.config.budget.deep_usd if deep else self.config.budget.quick_usd
         messages: list[dict] = [{"role": "user", "content": analyze_prompt(symbol, deep)}]
         tools = [*tools_mod.TOOL_SCHEMAS, SUBMIT_REPORT_TOOL]
         submit_rejections = 0
@@ -129,8 +141,35 @@ class Orchestrator:
             }
             if force_submit:
                 create_kwargs["tool_choice"] = {"type": "tool", "name": "submit_report"}
+            if ledger.total_usd >= budget_usd:
+                raise BudgetExceededError(
+                    f"预算超限：已花费 ${ledger.total_usd:.4f}，"
+                    f"{'deep' if deep else 'quick'} 档上限 ${budget_usd:.2f}"
+                )
+            call_start = time.monotonic()
             resp, used = self.llm.create(chain, **create_kwargs)
-            trace.llm_calls.append(LLMCallRecord(model=used.model, stop_reason=resp.stop_reason))
+            latency_s = time.monotonic() - call_start
+            usage = getattr(resp, "usage", None)
+            input_tokens = usage.input_tokens if usage is not None else 0
+            output_tokens = usage.output_tokens if usage is not None else 0
+            ledger.record_llm(used.model, input_tokens, output_tokens, latency_s)
+            trace.llm_calls.append(
+                LLMCallRecord(
+                    model=used.model,
+                    stop_reason=resp.stop_reason,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    latency_s=latency_s,
+                )
+            )
+            _log.info(
+                "llm_call",
+                model=used.model,
+                stop_reason=resp.stop_reason,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                latency_s=round(latency_s, 3),
+            )
             trace.final_model = used.model
             # 降级后从降级档继续：之前的档已证明失败，后续轮次不再逐轮撞它
             if used is not chain[0]:
@@ -181,6 +220,7 @@ class Orchestrator:
                         provenance_ref=trace.trace_id,
                         data_types_present=_data_types(recorder),
                         lenient=lenient,
+                        cost_usd=ledger.total_usd if ledger.total_usd > 0 else None,
                     )
                     outcome = (
                         "accepted"
@@ -192,6 +232,7 @@ class Orchestrator:
                             name="submit_report", input=dict(tool_input), output=outcome[:2000]
                         )
                     )
+                    _log.info("submit", accepted=result.report is not None)
                     if result.report is None:
                         submit_rejections += 1
                         tool_results.append(
@@ -222,6 +263,7 @@ class Orchestrator:
                 output = tools_mod.execute_tool(
                     tool_name, tool_input, provider, context=context, trace=recorder
                 )
+                _log.info("tool_call", name=tool_name)
                 trace.tool_calls.append(
                     ToolCallRecord(name=tool_name, input=dict(tool_input), output=output)
                 )

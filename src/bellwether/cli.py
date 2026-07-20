@@ -10,10 +10,12 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from .agent.prompts import DISCLAIMER
 from .agent.router import VALID_ROLES, ModelRouter
 from .config import KEYRING_SERVICE, KEYRING_USERNAME, api_key_source, load_config
 from .core.context import AnalysisContext, FrozenClock, SystemClock
 from .core.exceptions import BellwetherError
+from .core.logging import setup_logging
 from .core.redact import redact
 
 app = typer.Typer(
@@ -61,8 +63,18 @@ def analyze(
     cassette: str | None = typer.Option(
         None, "--cassette", help="用冻结的 cassette 目录重放（离线确定性分析，不打网）"
     ),
+    verbose: bool = typer.Option(
+        False, "--verbose", help="打印详细分析过程日志（llm_call/tool_call/submit）到 stderr"
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="把结构化报告（report.json）全文打印到 stdout，替代 rich 面板"
+    ),
+    quiet: bool = typer.Option(
+        False, "--quiet", help="只打印报告正文纯文本（无面板/无 dim 行，免责声明保留一行）"
+    ),
 ) -> None:
     """分析单只股票。"""
+    setup_logging(verbose)
     config = load_config(config_path)
     if not config.anthropic_api_key:
         console.print("[red]未检测到 ANTHROPIC_API_KEY 环境变量[/red]，无法调用模型。")
@@ -121,11 +133,31 @@ def analyze(
             console.print(f"[dim]故障 trace：{orch.last_trace_path}[/dim]")
         raise typer.Exit(code=1) from exc
 
-    render_analysis(symbol, verdict, show_disclaimer=config.report.disclaimer)
-    if orch.last_trace_path:
-        console.print(f"[dim]分析溯源已记录：{orch.last_trace_path}[/dim]")
-    if orch.last_report_path:
-        console.print(f"[dim]结构化报告（report.json）：{orch.last_report_path}[/dim]")
+    if json_output:
+        if orch.last_report_path:
+            typer.echo(orch.last_report_path.read_text(encoding="utf-8"))
+            return
+        typer.echo(json.dumps({"error": "unstructured"}))
+        raise typer.Exit(code=1)
+
+    if quiet:
+        typer.echo(verdict)
+        if config.report.disclaimer:
+            typer.echo(DISCLAIMER)
+    else:
+        render_analysis(symbol, verdict, show_disclaimer=config.report.disclaimer)
+        if orch.last_trace_path:
+            console.print(f"[dim]分析溯源已记录：{orch.last_trace_path}[/dim]")
+        if orch.last_report_path:
+            console.print(f"[dim]结构化报告（report.json）：{orch.last_report_path}[/dim]")
+        if orch.last_cost:
+            cost = orch.last_cost
+            tokens = cost["total_input_tokens"] + cost["total_output_tokens"]
+            console.print(
+                f"[dim]成本：{tokens} tokens / ${cost['total_usd']:.4f}"
+                f"（price-book {cost['price_book_version']}；未知模型不计价）[/dim]"
+            )
+
     if output:
         from .report import export_markdown
 

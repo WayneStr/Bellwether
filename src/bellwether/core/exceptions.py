@@ -61,3 +61,8 @@ class ModelNotFoundError(LLMError):
 # ─────────────────────────── 工具 ───────────────────────────
 class ToolError(BellwetherError):
     """agent tool 执行失败。"""
+
+
+# ─────────────────────────── 预算 ───────────────────────────
+class BudgetExceededError(BellwetherError):
+    """单次分析成本已达硬预算上限（RFC-000 §7 / ADR-0004）——不可重试，直接中止本次分析。"""

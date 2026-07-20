@@ -19,14 +19,17 @@ def _no_api_key(monkeypatch):
     monkeypatch.setattr("bellwether.config._keyring_get_api_key", lambda: None)
 
 
-def _make_orchestrator(*, verdict="研判结论", trace_path=None, error=None):
+def _make_orchestrator(
+    *, verdict="研判结论", trace_path=None, report_path=None, cost=None, error=None
+):
     """构造一个假 Orchestrator 类：analyze 返回固定 verdict，或抛出指定异常。"""
 
     class _FakeOrchestrator:
         def __init__(self, config):
             self.config = config
             self.last_trace_path = trace_path
-            self.last_report_path = None
+            self.last_report_path = report_path
+            self.last_cost = cost
 
         def analyze(self, symbol, *, context=None, deep=False, model_override=None, **overrides):
             if error is not None:
@@ -89,6 +92,57 @@ def test_analyze_exports_markdown(monkeypatch, tmp_path):
     assert result.exit_code == 0
     assert out_path.exists()
     assert "导出内容标记" in out_path.read_text(encoding="utf-8")
+
+
+def test_analyze_json_flag_prints_report(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    report_path = tmp_path / "report.json"
+    report_path.write_text('{"meta": {"symbol": "AAPL"}}', encoding="utf-8")
+    monkeypatch.setattr(
+        "bellwether.agent.orchestrator.Orchestrator",
+        _make_orchestrator(verdict="正文", report_path=report_path),
+    )
+    result = runner.invoke(
+        app, ["analyze", "AAPL", "--config", str(tmp_path / "nope.toml"), "--json"]
+    )
+    assert result.exit_code == 0
+    assert '"symbol": "AAPL"' in result.output
+
+
+def test_analyze_json_flag_unstructured_exits_1(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setattr(
+        "bellwether.agent.orchestrator.Orchestrator", _make_orchestrator(verdict="正文")
+    )
+    result = runner.invoke(
+        app, ["analyze", "AAPL", "--config", str(tmp_path / "nope.toml"), "--json"]
+    )
+    assert result.exit_code == 1
+    assert "unstructured" in result.output
+
+
+def test_analyze_quiet_flag_prints_plain_text(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setattr(
+        "bellwether.agent.orchestrator.Orchestrator", _make_orchestrator(verdict="安静模式正文")
+    )
+    result = runner.invoke(
+        app, ["analyze", "AAPL", "--config", str(tmp_path / "nope.toml"), "--quiet"]
+    )
+    assert result.exit_code == 0
+    assert "安静模式正文" in result.output
+    assert "分析溯源已记录" not in result.output
+
+
+def test_analyze_verbose_flag_smoke(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setattr(
+        "bellwether.agent.orchestrator.Orchestrator", _make_orchestrator(verdict="研判结论文本")
+    )
+    result = runner.invoke(
+        app, ["analyze", "AAPL", "--config", str(tmp_path / "nope.toml"), "--verbose"]
+    )
+    assert result.exit_code == 0
 
 
 def test_analyze_model_not_found_exits_1(monkeypatch, tmp_path):

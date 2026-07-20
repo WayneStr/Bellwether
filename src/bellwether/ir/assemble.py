@@ -123,6 +123,7 @@ def assemble_report(
     provenance_ref: str,
     data_types_present: set[str],
     lenient: bool = False,
+    cost_usd: float | None = None,
 ) -> AssemblyResult:
     """草稿 → StructuredReport。strict 模式违规即拒（返回违规清单给 LLM 重写）；
     lenient 模式违规条目 drop（重试耗尽后的兜底，诚实计数绝不带病输出）。"""
@@ -220,6 +221,7 @@ def assemble_report(
         prompt_versions=prompt_versions,
         coverage=derive_coverage(symbol, market, context, data_types_present),
         dropped_claims=len(dropped),
+        cost_usd=cost_usd,
     )
     try:
         report = StructuredReport(

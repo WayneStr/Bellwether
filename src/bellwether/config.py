@@ -31,11 +31,21 @@ class ReportConfig(BaseModel):
     language: str = "zh"
 
 
+class BudgetConfig(BaseModel):
+    """单次分析成本硬上限（ADR-0004 默认值；config.toml 的 [budget] 可覆盖）。"""
+
+    quick_usd: float = 0.35
+    deep_usd: float = 1.50
+
+
 class AppConfig(BaseModel):
     models: ModelConfig = Field(default_factory=ModelConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     data: DataConfig = Field(default_factory=DataConfig)
     report: ReportConfig = Field(default_factory=ReportConfig)
+    # price-book 覆盖（core/costs.py 的内置定价仅占位；中转模型名不同时须在此覆盖）
+    pricing: dict[str, dict[str, float]] = Field(default_factory=dict)
+    budget: BudgetConfig = Field(default_factory=BudgetConfig)
 
     # 密钥不进配置文件：环境变量优先，其次系统钥匙串（keyring，可选依赖）。
     @property
