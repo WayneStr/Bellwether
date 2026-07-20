@@ -76,9 +76,10 @@ class Orchestrator:
         context: AnalysisContext,
         deep: bool = False,
         model_override: str | None = None,
+        provider: MarketDataProvider | None = None,
         **param_overrides: Any,
     ) -> str:
-        provider = ProviderRegistry.for_symbol(symbol)
+        provider = provider or ProviderRegistry.for_symbol(symbol)
         role = "deep_report" if deep else "synthesis"
         chain = self.router.resolve_chain(role, model=model_override, **param_overrides)
 

@@ -7,6 +7,10 @@ extractor，落 provenance trace，R7/R8 核验的依据）。
 时间语义（ADR-0006 P9/B8）：captured_at 是字节首次真实获取时刻（provider 经
 df.attrs / fetched_at 携带，缓存命中回填原值）；超过 STALE_AFTER 的证据强制
 confidence="stale"。live 免费源均为 observed（first_seen_at = captured_at）。
+
+cassette 重放（C2a）：context.capture_policy="cassette" 时 register_value 改走
+pit_class="replay"（first_seen_at/available_at 均 None，confidence 恒 "reported"，
+跳过 stale 判定）；live/silver 不受影响，行为与此前一致。
 """
 
 from __future__ import annotations
@@ -117,6 +121,14 @@ class ToolRecorder:
 
         抽取失败（字段缺失/None）返回 None——调用方跳过该值，数据缺口由
         coverage 机械推导呈现（批 B），绝不静默造值。
+
+        PIT 语义按 `context.capture_policy` 分支（C2a）：cassette → `pit_class="replay"`，
+        `first_seen_at`/`available_at` 均为 None（spec-001：replay 无 available_at；
+        S9 报告级校验要求 cassette 报告全 replay），stale 判定跳过、`confidence` 恒
+        `"reported"`（诚实性已由 `capture_policy="cassette"` 语义承担，无需叠加时效
+        判断）；live/silver → 现状 observed 语义不变。`SourceRef.captured_at` 两种策略
+        下都取 `captured.captured_at`（cassette 下由调用方的捕获路径决定，未特别处理
+        「回填录制时刻」——已知简化，见 HANDOFF）。
         """
         args = extractor_args or {}
         try:
@@ -124,9 +136,19 @@ class ToolRecorder:
         except (KeyError, IndexError, TypeError, ValueError):
             return None
 
-        confidence = (
-            "stale" if self.context.as_of - captured.captured_at > STALE_AFTER else "reported"
-        )
+        if self.context.capture_policy == "cassette":
+            pit_class: Literal["authoritative", "observed", "replay"] = "replay"
+            first_seen_at: datetime | None = None
+            available_at: datetime | None = None
+            confidence: Literal["reported", "derived", "estimated", "stale", "missing"] = "reported"
+        else:
+            pit_class = "observed"
+            first_seen_at = captured.captured_at
+            # observed: max(first_seen_at)；免费源无 released_at
+            available_at = captured.captured_at
+            confidence = (
+                "stale" if self.context.as_of - captured.captured_at > STALE_AFTER else "reported"
+            )
         source = SourceRef(
             provider_id=captured.provider_id,
             upstream_source=captured.upstream_source,
@@ -146,9 +168,9 @@ class ToolRecorder:
             unit=unit,
             currency=currency,
             published_at=published_at,
-            first_seen_at=captured.captured_at,
-            available_at=captured.captured_at,  # observed: max(first_seen_at)；免费源无 released_at
-            pit_class="observed",
+            first_seen_at=first_seen_at,
+            available_at=available_at,
+            pit_class=pit_class,
             price_basis=price_basis,
             anchor_date=anchor_date,
             source=source,

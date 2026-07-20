@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -10,7 +12,7 @@ from rich.table import Table
 
 from .agent.router import VALID_ROLES, ModelRouter
 from .config import KEYRING_SERVICE, KEYRING_USERNAME, api_key_source, load_config
-from .core.context import AnalysisContext, SystemClock
+from .core.context import AnalysisContext, FrozenClock, SystemClock
 from .core.exceptions import BellwetherError
 from .core.redact import redact
 
@@ -36,6 +38,14 @@ def _make_context(as_of: str | None) -> AnalysisContext:
     return AnalysisContext(as_of=parsed, capture_policy="live", clock=clock)
 
 
+def _make_cassette_context(as_of: str) -> AnalysisContext:
+    """cassette 重放专用 context（spec-002 §1 replay 语义）：FrozenClock 恒返回 as_of，
+    使同一 cassette 下的两次重放产出确定性时间戳。"""
+    parsed = datetime.fromisoformat(as_of)
+    parsed = parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+    return AnalysisContext(as_of=parsed, capture_policy="cassette", clock=FrozenClock(parsed))
+
+
 @app.command()
 def analyze(
     symbol: str = typer.Argument(..., help="股票代码，如 AAPL"),
@@ -47,6 +57,9 @@ def analyze(
     config_path: str | None = typer.Option(None, "--config", help="指定 config.toml 路径"),
     as_of: str | None = typer.Option(
         None, "--as-of", help="以指定时间为分析基准（ISO 格式，默认当前时间）"
+    ),
+    cassette: str | None = typer.Option(
+        None, "--cassette", help="用冻结的 cassette 目录重放（离线确定性分析，不打网）"
     ),
 ) -> None:
     """分析单只股票。"""
@@ -66,12 +79,40 @@ def analyze(
     if max_tokens is not None:
         overrides["max_tokens"] = max_tokens
 
-    context = _make_context(as_of)
     orch = Orchestrator(config)
     try:
+        if cassette:
+            # 延迟 import：只在 --cassette 路径需要 provider 抽象与市场探测
+            from .data.base import detect_market
+            from .data.cassette import CassetteProvider
+
+            cassette_root = Path(cassette)
+            manifest = json.loads((cassette_root / "manifest.json").read_text(encoding="utf-8"))
+            market = detect_market(symbol)
+            inner_source_name = next(
+                (
+                    entry["provider_id"]
+                    for entry in manifest["entries"].values()
+                    if detect_market(entry["args"].get("symbol", "")) == market
+                ),
+                "recorded",
+            )
+            context = _make_cassette_context(as_of or manifest["as_of"])
+            provider = CassetteProvider(
+                cassette_root, market=market, inner_source_name=inner_source_name
+            )
+        else:
+            context = _make_context(as_of)
+            provider = None
+
         with console.status(f"正在分析 {symbol} ……"):
             verdict = orch.analyze(
-                symbol, context=context, deep=deep, model_override=model, **overrides
+                symbol,
+                context=context,
+                deep=deep,
+                model_override=model,
+                provider=provider,
+                **overrides,
             )
     except BellwetherError as exc:  # 重试与降级仍未成功 → 明示失败（D2），不落半截报告
         console.print(f"[red]分析失败[/red]（{type(exc).__name__}）：{redact(str(exc))}")
@@ -239,6 +280,101 @@ def snapshot(
     code = exit_code_for(manifest)
     if code:
         raise typer.Exit(code=code)
+
+
+@app.command("cassette-record")
+def cassette_record(
+    root: str | None = typer.Option(
+        None, "--root", help="cassette 根目录（默认 ~/.bellwether/cassettes/<YYYY-MM-DD>）"
+    ),
+    markets: str | None = typer.Option(None, "--markets", help="逗号分隔市场过滤，如 US,HK"),
+    smoke: bool = typer.Option(False, "--smoke", help="冒烟模式：每市场只录前 3 只"),
+    delay: float = typer.Option(0.7, "--delay", help="标的间隔秒数（礼貌限流）"),
+    golden: str | None = typer.Option(None, "--golden", help="自定义黄金集 toml 路径"),
+    as_of: str | None = typer.Option(
+        None, "--as-of", help="以指定时间为录制基准（ISO 格式，默认当前时间）"
+    ),
+) -> None:
+    """C2a cassette 录制：黄金集行情/基本面/新闻录成冻结输入，供 analyze --cassette 确定性重放
+    （不调用 LLM，不需要 API key）。"""
+    import random
+    import time
+
+    from .agent.tools import _df_records
+    from .data.base import ProviderRegistry, period_to_start
+    from .data.cassette import CassetteRecorder, fundamentals_args, news_args, ohlcv_args
+    from .snapshot import load_golden_set
+
+    context = _make_context(as_of)
+    root_dir = (
+        Path(root)
+        if root
+        else Path.home() / ".bellwether" / "cassettes" / context.as_of.date().isoformat()
+    )
+    universe = load_golden_set(golden)
+    if markets:
+        wanted = {m.strip().upper() for m in markets.split(",")}
+        universe = {m: syms for m, syms in universe.items() if m in wanted}
+    if smoke:
+        universe = {m: syms[:3] for m, syms in universe.items()}
+
+    end = context.as_of.date()
+    start = period_to_start("6mo", end)
+    recorder = CassetteRecorder(root_dir)
+    failures: dict[str, str] = {}
+    success = 0
+
+    with console.status("正在录制 cassette ……"):
+        for market, symbols in universe.items():
+            provider = ProviderRegistry.for_market(market)
+            for symbol in symbols:
+                key = f"{market}:{symbol}"
+                try:
+                    sym = provider.resolve_symbol(symbol, context=context)
+                    df = provider.get_ohlcv(
+                        sym, start, end, interval="1d", adjust="default", context=context
+                    )
+                    recorder.record(
+                        provider.source,
+                        "get_ohlcv",
+                        ohlcv_args(sym, start, end),
+                        {"records": _df_records(df)},
+                    )
+                    fund = provider.get_fundamentals(sym, context=context)
+                    recorder.record(
+                        provider.source,
+                        "get_fundamentals",
+                        fundamentals_args(sym),
+                        fund.model_dump(mode="json"),
+                    )
+                    news = provider.get_news(sym, 10, context=context)
+                    recorder.record(
+                        provider.source,
+                        "get_news",
+                        news_args(sym, 10),
+                        {"items": [n.model_dump(mode="json") for n in news]},
+                    )
+                    success += 1
+                except Exception as exc:
+                    failures[key] = str(exc)
+                if delay > 0:
+                    time.sleep(delay + random.uniform(0, 0.3))  # 礼貌限流，防免费源封禁
+
+    manifest_path = recorder.finalize(context.as_of)
+    total = success + len(failures)
+    table = Table(
+        title=f"Bellwether cassette 录制 · {context.as_of.date()}{'（smoke）' if smoke else ''}"
+    )
+    table.add_column("成功", justify="right")
+    table.add_column("失败", justify="right")
+    table.add_row(str(success), f"[red]{len(failures)}[/red]" if failures else "0")
+    console.print(table)
+    console.print(f"[dim]cassette manifest：{manifest_path}[/dim]")
+    if failures:
+        console.print(f"[yellow]{len(failures)}/{total} 个标的存在失败项[/yellow]")
+        for key, err in failures.items():
+            console.print(f"  [red]{key}[/red]: {redact(err)}")
+        raise typer.Exit(code=1)
 
 
 @app.command()
