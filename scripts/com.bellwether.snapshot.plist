@@ -2,7 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Bellwether A0 每日快照（ROADMAP A0；安装/卸载见 scripts/README-snapshot-schedule.md） -->
+    <!-- Bellwether A0 每日快照（ROADMAP A0；安装/卸载见 scripts/README-snapshot-schedule.md）
+         使用前把所有 YOUR_USERNAME 替换成本机用户名：launchd 不展开 ~ 和环境变量，必须写绝对路径。 -->
     <key>Label</key>
     <string>com.bellwether.snapshot</string>
     <!-- 独立运行环境 ~/.bellwether/venv：launchd 进程无 TCC 授权，不能引用受保护的

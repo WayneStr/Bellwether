@@ -8,8 +8,9 @@
 
 请**不要**在公开 issue 中披露安全问题。
 
-- 首选：GitHub Security Advisories（仓库公开后启用「Report a vulnerability」私密通道）
-- 备选：邮件联系维护者 <43822696+WayneStr@users.noreply.github.com>
+请走 GitHub Security Advisories 私密通道上报：仓库 **Security** 标签页 →
+**Report a vulnerability**（[直达链接](https://github.com/WayneStr/Bellwether/security/advisories/new)）。
+该通道对外不可见，仅维护者可读。
 
 我们会在 7 天内确认收到，并在修复发布前与你协调披露时间。
 
