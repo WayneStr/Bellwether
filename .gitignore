@@ -16,3 +16,6 @@ config.toml
 # 数据缓存
 .cache/
 *.parquet
+
+# macOS
+.DS_Store
