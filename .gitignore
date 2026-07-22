@@ -19,3 +19,7 @@ config.toml
 
 # macOS
 .DS_Store
+
+# 内部工作文档（本地保留，不公开）
+HANDOFF.md
+docs/reviews/
