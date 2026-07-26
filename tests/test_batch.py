@@ -201,3 +201,31 @@ def test_null_distribution_detects_spread():
     run_b = [_case_with_reasoning("AAPL", 80.0)]
     stats = null_distribution([run_a, run_b], "reasoning")
     assert stats["pairs"] == 1 and stats["abs_max"] == 10.0
+
+
+def test_run_batch_survives_unexpected_exception(tmp_path, monkeypatch):
+    """单例抛任意异常（非 BellwetherError）绝不炸整批——如实记 failure 继续。"""
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    good = _stub_analyze(reports)
+
+    def sometimes_crash(config, manifest, cassette_root, symbol):
+        if symbol == "MSFT":
+            raise AttributeError("'str' object has no attribute 'get'")
+        return good(config, manifest, cassette_root, symbol)
+
+    monkeypatch.setattr(batch_mod, "_analyze_one", sometimes_crash)
+    out = tmp_path / "out"
+    summary = run_batch(
+        AppConfig(),
+        BatchConfig(
+            cassette_root=_cassette_dir(tmp_path, ["AAPL", "MSFT"]),
+            out_dir=out,
+            k=1,
+            judge=False,
+        ),
+    )
+    run1 = summary["meta"]["runs"][0]
+    assert run1["cases_ok"] == 1
+    assert run1["failures"][0]["symbol"] == "MSFT"
+    assert "未预期异常 AttributeError" in run1["failures"][0]["error"]

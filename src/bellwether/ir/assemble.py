@@ -136,15 +136,31 @@ def assemble_report(
         else:
             violations.append(f"{where}: {reason} — {text[:80]!r}")
 
+    def _as_list(field: str) -> list:
+        value = draft.get(field) or []
+        if not isinstance(value, list):
+            _reject(str(value)[:80], f"{field} 必须是列表", field)
+            return []
+        return value
+
     sections: list[Section] = []
-    for s_idx, raw_section in enumerate(draft.get("sections") or []):
+    for s_idx, raw_section in enumerate(_as_list("sections")):
+        # LLM 输入不可信：schema 声明是 object，模型仍可能给裸字符串等畸形条目
+        # （2026-07-26 smoke 真实发生）——一律按违规拒绝反馈重写，绝不抛异常。
+        if not isinstance(raw_section, dict):
+            _reject(str(raw_section)[:80], "段落必须是 {title, claims} 对象", f"sections[{s_idx}]")
+            continue
         title = str(raw_section.get("title") or "").strip()
         if not title or scan_naked_numbers(title):
             _reject(title or "(无标题)", "段落标题为空或含裸数字", f"sections[{s_idx}]")
             continue
         opinion = _is_opinion_section(title)
         claims: list[Claim] = []
-        for c_idx, text in enumerate(raw_section.get("claims") or []):
+        raw_claims = raw_section.get("claims")
+        if not isinstance(raw_claims, list):
+            _reject(title, "claims 必须是字符串列表", f"sections[{s_idx}]")
+            continue
+        for c_idx, text in enumerate(raw_claims):
             text = str(text)
             where = f"sections[{s_idx}].claims[{c_idx}]"
             reason = _check_claim_text(text, store)
@@ -164,12 +180,13 @@ def assemble_report(
         if claims:
             sections.append(Section(section_id=f"s{s_idx}", title=title, claims=claims))
 
+    all_scenarios = _as_list("scenarios")
+    raw_scenarios = [s for s in all_scenarios if isinstance(s, dict)]
+    for bad in (s for s in all_scenarios if not isinstance(s, dict)):
+        _reject(str(bad)[:80], "情景必须是 {name, narrative} 对象", "scenarios")
     scenarios: list[Scenario] = []
     for name in ("bull", "base", "bear"):
-        raw = next(
-            (s for s in draft.get("scenarios") or [] if s.get("name") == name),
-            None,
-        )
+        raw = next((s for s in raw_scenarios if s.get("name") == name), None)
         if raw is None:
             continue
         narrative = str(raw.get("narrative") or "")
@@ -182,7 +199,7 @@ def assemble_report(
         )
 
     risks: list[Claim] = []
-    for r_idx, text in enumerate(draft.get("risks") or []):
+    for r_idx, text in enumerate(_as_list("risks")):
         text = str(text)
         where = f"risks[{r_idx}]"
         reason = _check_claim_text(text, store)

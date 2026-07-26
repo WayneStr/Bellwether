@@ -184,3 +184,39 @@ def test_render_r5_invariant_catches_dirty_template():
     bad = report.model_copy(update={"sections": [bad_section, report.sections[1]]})
     with pytest.raises(RuntimeError, match="naked number"):
         render_report(bad)
+
+
+# ─────────── 畸形 draft 防御（2026-07-26 smoke：模型给裸字符串 section 炸 assemble） ───────────
+@pytest.mark.parametrize(
+    "draft",
+    [
+        {"sections": ["裸字符串段落"]},  # section 非 object（真实发生）
+        {"sections": [{"title": "概览", "claims": "非列表"}]},
+        {"sections": "整个不是列表"},
+        {
+            "sections": [{"title": "概览", "claims": ["有 [E1] 的合法陈述"]}],
+            "scenarios": ["坏情景"],
+        },
+        {"sections": [{"title": "概览", "claims": ["引用 [E1]"]}], "risks": "非列表"},
+    ],
+)
+def test_malformed_draft_rejected_not_crash(draft):
+    """LLM 输入不可信：任何畸形结构必须转成违规反馈（strict 拒绝），绝不抛异常。"""
+    store, _, _ = _store_with_evidence()
+    result = _assemble(draft, store)
+    assert result.report is None
+    assert result.violations  # 有明确违规原因反馈给 LLM 重写
+
+
+def test_malformed_draft_lenient_drops(tmp_path):
+    store, e1, _ = _store_with_evidence()
+    draft = {
+        "sections": [
+            "裸字符串",
+            {"title": "概览", "claims": [f"收盘价 [{e1.eid}]"]},
+        ],
+        "risks": [f"注意 [{e1.eid}] 波动"],
+    }
+    result = _assemble(draft, store, lenient=True)
+    assert result.report is not None  # 合法部分照常出报告
+    assert result.report.meta.dropped_claims == 1  # 畸形条目诚实计数

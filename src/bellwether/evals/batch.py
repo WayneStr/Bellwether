@@ -120,7 +120,11 @@ def run_batch(
                 for s in symbols
             }
             for fut in as_completed(futures):
-                symbol, path, cost, error = fut.result()
+                try:
+                    symbol, path, cost, error = fut.result()
+                except Exception as exc:  # 单例意外异常绝不炸整批：如实记 failure
+                    symbol = futures[fut]
+                    path, cost, error = None, 0.0, f"未预期异常 {type(exc).__name__}: {exc}"
                 total_cost += cost
                 if error is not None:
                     failures.append({"symbol": symbol, "error": error[:300]})
