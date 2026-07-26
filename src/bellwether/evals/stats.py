@@ -69,6 +69,35 @@ def paired_diffs(
     return diffs, unmatched
 
 
+def null_distribution(runs: list[list[CaseResult]], dimension: str) -> dict:
+    """同配置 k 次运行的两两 mean(d) null 分布（RFC-003 §4.1）。
+
+    返回全部 pair means（以 0 为中心的抽样参照）与摘要统计；对照用法：候选的
+    mean(d) 若落在 |pair_means| 最大值之外，即超出「无真实退化时的噪声带」。
+    小样本（C(k,2)=10 对）下给出全列表比给分位数更诚实。
+    """
+    from itertools import combinations
+
+    pair_means: list[float] = []
+    dropped_pairs = 0
+    for a, b in combinations(range(len(runs)), 2):
+        diffs, _ = paired_diffs(runs[a], runs[b], dimension)
+        if diffs:
+            pair_means.append(round(statistics.fmean(diffs), 4))
+        else:
+            dropped_pairs += 1
+    if not pair_means:
+        return {"pairs": 0, "dropped_pairs": dropped_pairs, "pair_means": []}
+    return {
+        "pairs": len(pair_means),
+        "dropped_pairs": dropped_pairs,
+        "pair_means": sorted(pair_means),
+        "mean": round(statistics.fmean(pair_means), 4),
+        "stdev": round(statistics.stdev(pair_means), 4) if len(pair_means) > 1 else None,
+        "abs_max": round(max(abs(m) for m in pair_means), 4),
+    }
+
+
 def bootstrap_upper_bound(
     diffs: list[float], *, confidence: float = 0.95, n_boot: int = 10_000, seed: int = 0
 ) -> tuple[float, float]:

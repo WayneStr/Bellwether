@@ -96,19 +96,12 @@ def analyze(
         if cassette:
             # 延迟 import：只在 --cassette 路径需要 provider 抽象与市场探测
             from .data.base import detect_market
-            from .data.cassette import CassetteProvider
+            from .data.cassette import CassetteProvider, provider_id_for_market
 
             cassette_root = Path(cassette)
             manifest = json.loads((cassette_root / "manifest.json").read_text(encoding="utf-8"))
             market = detect_market(symbol)
-            inner_source_name = next(
-                (
-                    entry["provider_id"]
-                    for entry in manifest["entries"].values()
-                    if detect_market(entry["args"].get("symbol", "")) == market
-                ),
-                "recorded",
-            )
+            inner_source_name = provider_id_for_market(manifest, market)
             context = _make_cassette_context(as_of or manifest["as_of"])
             provider = CassetteProvider(
                 cassette_root, market=market, inner_source_name=inner_source_name
@@ -554,6 +547,78 @@ def _render_eval(eval_report) -> None:  # noqa: ANN001
             f"[dim]judge：{meta['model']} × {meta['n_judge']} 次/例"
             f" · ${cost.get('total_usd', 0):.4f}（未知模型不计价）[/dim]"
         )
+
+
+@app.command("eval-run")
+def eval_run_command(
+    cassette: str = typer.Argument(..., help="冻结 cassette 目录（cassette-record 产物）"),
+    k: int = typer.Option(1, "-k", help="重复轮数：k=1 出基线档案；k≥2 追加 null 分布统计"),
+    judge: bool = typer.Option(
+        True, "--judge/--no-judge", help="每例 LLM 推理质量评审（null/基线默认开）"
+    ),
+    n_judge: int = typer.Option(1, "--n-judge", help="每例评审次数"),
+    out: str | None = typer.Option(
+        None, "--output", "-o", help="产物目录（缺省 ~/.bellwether/evals/<日期>-k<k>）"
+    ),
+    concurrency: int = typer.Option(4, "--concurrency", help="并发分析数（中转限流自行斟酌）"),
+    budget: float = typer.Option(80.0, "--budget", help="本次跑批总成本硬上限 USD，超限中止"),
+    smoke: bool = typer.Option(False, "--smoke", help="冒烟：每市场只跑前 3 只，先验证全链"),
+    config_path: str | None = typer.Option(None, "--config", help="指定 config.toml 路径"),
+) -> None:
+    """C3 跑批：cassette 全量「生成→评测」重复 k 次（null 分布测定 / 基线归档执行器）。
+
+    产物：run-<i>.json（每轮 EvalReport）、null.json（k≥2 两两 mean(d) 分布）、
+    batch-meta.json（配置/成本/逐轮失败清单）。失败例如实记录不重试不造分。
+    """
+    config = load_config(config_path)
+    if not config.anthropic_api_key:
+        console.print("[red]未检测到 ANTHROPIC_API_KEY[/red]（env 或 keyring），无法跑批。")
+        raise typer.Exit(code=1)
+
+    from .evals.batch import BatchConfig, run_batch
+
+    cassette_root = Path(cassette).expanduser()
+    out_dir = (
+        Path(out).expanduser()
+        if out
+        else Path.home()
+        / ".bellwether"
+        / "evals"
+        / f"{SystemClock().now().date().isoformat()}-k{k}{'-smoke' if smoke else ''}"
+    )
+    batch = BatchConfig(
+        cassette_root=cassette_root,
+        out_dir=out_dir,
+        k=k,
+        judge=judge,
+        n_judge=n_judge,
+        concurrency=concurrency,
+        budget_usd=budget,
+        smoke=smoke,
+    )
+    summary = run_batch(config, batch, log=lambda s: console.print(f"[dim]{s}[/dim]"))
+
+    meta = summary["meta"]
+    console.print(
+        f"[bold]跑批完成[/bold]：{summary['runs']}/{k} 轮 · "
+        f"总成本 ${meta['total_cost_usd']:.2f}（上限 ${meta['budget_usd']:.2f}）"
+    )
+    for run in meta["runs"]:
+        fail_note = f"，失败 {len(run['failures'])} 例" if run["failures"] else ""
+        console.print(f"  run {run['run']}: {run['cases_ok']} 例成功{fail_note}")
+    if meta["aborted"]:
+        console.print(f"[red]{meta['aborted']}[/red]")
+    if summary["null"]:
+        for dim, stats in summary["null"].items():
+            if stats.get("pairs"):
+                console.print(
+                    f"[cyan]null[{dim}][/cyan]：{stats['pairs']} 对 mean(d)∈"
+                    f"[{stats['pair_means'][0]:+.2f}, {stats['pair_means'][-1]:+.2f}]"
+                    f"，|max|={stats['abs_max']:.2f}"
+                )
+    console.print(f"[green]产物目录[/green] → {out_dir}")
+    if meta["aborted"]:
+        raise typer.Exit(code=1)
 
 
 @app.command("gate")

@@ -27,7 +27,20 @@ from ..core.capture import canonical_json_bytes
 from ..core.context import AnalysisContext
 from ..core.exceptions import ConfigError, DataUnavailableError
 from ..models import FundamentalData, NewsItem, TradingRules
-from .base import MarketDataProvider, ProviderRegistry
+from .base import MarketDataProvider, ProviderRegistry, detect_market
+
+
+def provider_id_for_market(manifest: dict[str, Any], market: str) -> str:
+    """从 cassette manifest 找某市场录制时的 provider_id（重放端命名一致的前提）。"""
+    return next(
+        (
+            entry["provider_id"]
+            for entry in manifest["entries"].values()
+            if detect_market(entry["args"].get("symbol", "")) == market
+        ),
+        "recorded",
+    )
+
 
 _OHLCV_COLS = ["open", "high", "low", "close", "volume"]
 
