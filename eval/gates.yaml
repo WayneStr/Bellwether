@@ -1,0 +1,19 @@
+# C3 门禁声明式配置（RFC-003 §4.3）。任何改动走 PR 评审。
+# 与 src/bellwether/evals/gates.py 的 DEFAULT_GATES 保持同步（有守卫测试报警漂移）。
+#
+# gate 类型：
+#   zero_tolerance —— B 层 per-artifact 硬判：任何一例违规即红，无豁免通道
+#   absolute_min   —— 分数地板：任一例低于 floor 即红（floor 数值为 O5 起点，实测后校准）
+#   paired_ci      —— 与 baseline-of-record 逐例配对，case 聚类 bootstrap 置信区间
+#                     单侧上界 < 0（显著为负）即红；waiver=true 的维度可走
+#                     「PR 标签 + 签字豁免」人工流程（月报汇总），机器判定不变
+#
+# composite 分数定义（M2 起点，实测后校准）：单例四维的等权均值——
+#   factual/compliance 映射 pass=100 / fail=0；completeness = score×100；
+#   reasoning = judge 均值；skip/unverifiable 的维度不计入。
+dimensions:
+  factual:      {gate: zero_tolerance}
+  compliance:   {gate: zero_tolerance}
+  completeness: {gate: absolute_min, floor: 0.95}
+  reasoning:    {gate: paired_ci, waiver: true}
+composite:      {gate: paired_ci, waiver: false}

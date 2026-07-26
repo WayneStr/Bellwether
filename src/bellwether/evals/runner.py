@@ -39,12 +39,16 @@ def run_eval(
     """逐例评分并聚合。generated_at 是唯一时间字段（cases 内容确定性可复现）。"""
     judging = llm is not None and judge_spec is not None
     cases: list[CaseResult] = []
+    models_seen: set[str] = set()
+    prompts_seen: set[str] = set()
     for path in paths:
         try:
             report = load_report(path)
         except Exception as exc:  # json/文件/ValidationError 统一诚实呈现
             cases.append(CaseResult(report_path=str(path), error=f"{type(exc).__name__}: {exc}"))
             continue
+        models_seen.update(f"{role}:{mid}" for role, mid in report.meta.model_versions.items())
+        prompts_seen.update(f"{role}:{ver}" for role, ver in report.meta.prompt_versions.items())
         dims = [eval_factual(report, path), eval_completeness(report), eval_compliance(report)]
         if judging:
             assert judge_spec is not None and ledger is not None
@@ -75,6 +79,11 @@ def run_eval(
         cases=cases,
         summary=_summarize(cases),
         judge_meta=judge_meta,
+        fingerprint={
+            "models": sorted(models_seen),
+            "prompts": sorted(prompts_seen),
+            "judge": judge_spec.model if judging and judge_spec is not None else None,
+        },
     )
 
 

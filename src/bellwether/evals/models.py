@@ -64,3 +64,6 @@ class EvalReport(BaseModel):
     cases: list[CaseResult]
     summary: dict = Field(default_factory=dict)  # 每维度聚合视图
     judge_meta: dict | None = None  # {"model":…, "n_judge":…, "cost":…}；未启用 judge 为 None
+    # B9 版本指纹（从各 report.json 的 meta 聚合）：baseline-of-record 的比较前提。
+    # 门禁引擎在指纹失配时拒绝 paired 比较并要求重定基线（RFC-003 §4.1 重测触发）。
+    fingerprint: dict | None = None  # {"models": [...], "prompts": [...], "judge": str|None}

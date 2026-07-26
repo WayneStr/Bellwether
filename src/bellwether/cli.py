@@ -556,6 +556,59 @@ def _render_eval(eval_report) -> None:  # noqa: ANN001
         )
 
 
+@app.command("gate")
+def gate_command(
+    candidate: str = typer.Argument(..., help="candidate 评测档案（`bellwether eval -o` 的 JSON）"),
+    baseline: str | None = typer.Option(
+        None, "--baseline", help="baseline-of-record 评测档案；缺省则 paired 维度跳过"
+    ),
+    gates: str | None = typer.Option(
+        None, "--gates", help="gates.yaml 路径（缺省用与 eval/gates.yaml 同步的内置默认）"
+    ),
+    confidence: float = typer.Option(
+        0.95, "--confidence", help="paired_ci 单侧置信水平（PR 层建议 0.90，nightly/release 0.95）"
+    ),
+    seed: int = typer.Option(0, "--seed", help="bootstrap 随机种子（同种子判定逐位可复现）"),
+) -> None:
+    """C3 门禁：对评测档案按 gates 配置判定（zero_tolerance / absolute_min / paired_ci）。
+
+    与基线版本指纹（models/prompts/judge）失配时拒绝 paired 比较并要求重定基线（B9）。
+    任何维度红或需重定基线 → 退出码 1。
+    """
+    from .evals.gates import evaluate_gates, load_gates
+    from .evals.models import EvalReport
+
+    cand = EvalReport.model_validate_json(Path(candidate).expanduser().read_text(encoding="utf-8"))
+    base = (
+        EvalReport.model_validate_json(Path(baseline).expanduser().read_text(encoding="utf-8"))
+        if baseline
+        else None
+    )
+    result = evaluate_gates(cand, base, load_gates(gates), confidence=confidence, seed=seed)
+
+    table = Table(title="C3 门禁判定")
+    for col in ("维度", "gate", "判定", "明细"):
+        table.add_column(col)
+    for check in result.checks:
+        verdict = {
+            "pass": "[green]✓[/green]",
+            "fail": "[red]✗[/red]",
+            "skip": "[dim]跳过[/dim]",
+        }[check.verdict]
+        table.add_row(check.dimension, check.gate, verdict, check.detail)
+    console.print(table)
+
+    if result.requires_rebaseline:
+        console.print("[red]版本指纹失配——须重定基线后才能比较（B9 强制重测触发）：[/red]")
+        for diff in result.fingerprint_diff:
+            console.print(f"  [yellow]{diff}[/yellow]")
+
+    if result.verdict == "fail":
+        console.print("[red bold]门禁：不通过[/red bold]")
+        raise typer.Exit(code=1)
+    console.print("[green bold]门禁：通过[/green bold]")
+
+
 @app.command()
 def portfolio(
     symbols: list[str] = typer.Argument(..., help="多只股票代码，如 AAPL MSFT 600519"),  # noqa: B008

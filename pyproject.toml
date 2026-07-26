@@ -24,6 +24,7 @@ dependencies = [
     "typer>=0.12",
     "rich>=13.0",
     "structlog>=24",
+    "pyyaml>=6",  # C3：eval/gates.yaml 门禁声明式配置
 ]
 
 # 注：pandas-ta（技术指标）等 P1 才需要的依赖，等 P1 阶段再加入，
@@ -40,6 +41,7 @@ dev = [
     # mypy python_version=3.11 基线冲突；numpy 只是 pandas 的间接依赖，仅类型检查环境需要此上限。
     "numpy<2.3",
     "keyring>=24",  # D6：测试钥匙串读取路径
+    "types-PyYAML",  # C3：gates.yaml 读取的 mypy stubs
 ]
 cn = ["akshare"]  # A股/港股数据源（可选，仅分析 A股/港股需要）
 secure = ["keyring>=24"]  # 密钥存系统钥匙串（可选；环境变量始终可用且优先）
