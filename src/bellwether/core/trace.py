@@ -23,7 +23,7 @@ from .redact import redact
 
 DEFAULT_TRACE_ROOT = Path.home() / ".bellwether" / "traces"
 DEFAULT_CAPTURE_ROOT = Path.home() / ".bellwether" / "captures"
-TRACE_VERSION = 3
+TRACE_VERSION = 4  # v4：ToolCallRecord 增 tool_use_id（C1 评测侧 R7c 复验的会话 id 来源）
 
 
 class EvidenceBinding(BaseModel):
@@ -40,6 +40,7 @@ class ToolCallRecord(BaseModel):
     name: str
     input: dict
     output: str  # tool_result 原文（JSON 字符串），回放渲染的依据
+    tool_use_id: str | None = None  # v4：本轮 tool_use 块 id；None = v3 及更早的旧 trace
 
 
 class LLMCallRecord(BaseModel):

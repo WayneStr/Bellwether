@@ -11,11 +11,12 @@ from typing import Any
 
 from ..models import ModelConfig, ModelSpec
 
-VALID_ROLES = ("parse", "synthesis", "deep_report")
+VALID_ROLES = ("parse", "synthesis", "deep_report", "judge")
 
 # LLM 故障降级顺序（D2）：换的只是模型 id，任务参数（temperature/max_tokens）保留
 # 原角色的——降级是「换一台发动机」，不是换任务。parse 已是最低档，无处可降。
-_FALLBACK_ROLE = {"deep_report": "synthesis", "synthesis": "parse", "parse": None}
+# judge 不降级：评审模型漂移会破坏评测可比性（RFC-003 §4.1 重测触发条件），失败即明示。
+_FALLBACK_ROLE = {"deep_report": "synthesis", "synthesis": "parse", "parse": None, "judge": None}
 
 
 class ModelRouter:

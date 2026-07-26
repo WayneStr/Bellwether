@@ -136,7 +136,12 @@ def test_trace_records_full_analysis(orch, ctx):
     assert len(data["llm_calls"]) == 3
     assert data["llm_calls"][0]["stop_reason"] == "tool_use"
     assert data["tool_calls"] == [
-        {"name": "get_price_history", "input": {"symbol": "AAPL"}, "output": '{"ok": true}'}
+        {
+            "name": "get_price_history",
+            "input": {"symbol": "AAPL"},
+            "output": '{"ok": true}',
+            "tool_use_id": "tu_1",  # trace v4：评测侧 R7c 复验的会话 id 来源
+        }
     ]
     assert data["degraded"] is False
     assert data["prompt_version"] and data["input_hash"]

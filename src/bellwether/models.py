@@ -54,6 +54,12 @@ class ModelConfig(BaseModel):
             params=ModelParams(temperature=0.3, max_tokens=8192),
         )
     )
+    judge: ModelSpec = Field(
+        default_factory=lambda: ModelSpec(
+            model="claude-haiku-4-5-20251001",
+            params=ModelParams(temperature=0.0, max_tokens=1024),
+        )
+    )
 
 
 # ────────────────────────────── 2. 数据层 ──────────────────────────────

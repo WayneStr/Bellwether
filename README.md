@@ -52,11 +52,16 @@ bellwether config show                  # 生效模型 + key 状态（含来源�
 bellwether config set-key               # 把 key 存入系统钥匙串（需 [secure] 可选依赖）
 bellwether models                       # 列出当前 API 地址可用的模型 id
 bellwether analyze AAPL --model <id> --temperature 0.2   # 运行时覆盖模型
+
+# 评测（C1）：对结构化报告（report.json）四维判分
+bellwether eval ~/.bellwether/traces/<日期>/            # 目录下全部 *-report.json
+bellwether eval <trace_id>-report.json --json           # 机器可读 EvalReport
+bellwether eval <...> --judge --n-judge 3               # 追加 LLM 推理质量评审（花费额度）
 ```
 
 ## 模型可配置
 
-角色化（`parse` / `synthesis` / `deep_report`）+ 三级覆盖：`CLI 参数 > config.toml > 内置默认`。代码任何地方都不硬编码模型名，一律经 `ModelRouter` 解析。用第三方中转时，先 `bellwether models` 查它实际支持的模型 id 再填。
+角色化（`parse` / `synthesis` / `deep_report` / `judge`）+ 三级覆盖：`CLI 参数 > config.toml > 内置默认`。代码任何地方都不硬编码模型名，一律经 `ModelRouter` 解析。用第三方中转时，先 `bellwether models` 查它实际支持的模型 id 再填。`judge`（评测评审员）不参与降级链——评审模型漂移会破坏评测可比性，失败即明示。
 
 ## 数据源与网络
 
@@ -73,12 +78,13 @@ bellwether analyze AAPL --model <id> --temperature 0.2   # 运行时覆盖模型
 - **数据源**：异常按类型决定行为（连接/限流类退避重试，空数据立即失败）；单源熔断（连续失败后快速跳过，冷却自愈）；A股行情东财失败自动降级新浪。
 - **LLM**：限流/瞬态退避重试；模型持续不可用时自动降一档（`deep_report`→`synthesis`→`parse`，只换模型 id 不换任务参数），报告尾部**明示**降级；认证失败立即明示不掩盖。用户显式 `--model` 时不降级。
 - **溯源**：每次 `analyze` 落一份 provenance trace（输入哈希/prompt 版本/模型链/完整 tool 调用记录）到 `~/.bellwether/traces/`，成功失败都记录；输出与落盘文本统一脱敏（密钥零泄漏，见 `SECURITY.md`）。
+- **评测**：`bellwether eval` 对 report.json 四维判分——事实性（R1 裸数字重扫 + R7/R8 溯源逐位重算，程序化硬判）、完整性（分档机械清单）、合规（措辞规则层）、推理质量（`--judge` 启用 LLM 评审，n≥2 出 95% 置信区间）。程序化维度重复评分逐位一致；确凿违规退出码 1。
 
 ## 测试
 
 ```fish
 uv pip install -e ".[dev]"
-pytest        # 112 个单测：确定性计算全覆盖 + 数据源/LLM 两侧故障注入（熔断/重试/降级）
+pytest        # 248 个单测：确定性计算全覆盖 + 数据源/LLM 两侧故障注入 + IR 构造性核验 + 评测器守门员
 ```
 
 ## 合规

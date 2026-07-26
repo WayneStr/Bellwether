@@ -409,6 +409,148 @@ def cassette_record(
         raise typer.Exit(code=1)
 
 
+@app.command("eval")
+def eval_reports(
+    targets: list[str] = typer.Argument(  # noqa: B008
+        ..., help="report.json 文件或含 *-report.json 的目录（如 ~/.bellwether/traces/<日期>/）"
+    ),
+    judge: bool = typer.Option(
+        False, "--judge", help="启用 LLM 推理质量评审（judge 角色模型，花费中转额度）"
+    ),
+    n_judge: int = typer.Option(
+        1, "--n-judge", help="每份报告的评审次数（n≥2 时输出 95% 置信区间）"
+    ),
+    json_output: bool = typer.Option(False, "--json", help="打印 EvalReport JSON 到 stdout"),
+    output: str | None = typer.Option(None, "--output", "-o", help="把 EvalReport JSON 落盘"),
+    config_path: str | None = typer.Option(None, "--config", help="指定 config.toml 路径"),
+) -> None:
+    """C1 评测：对结构化报告（report.json）四维判分——事实性/完整性/合规/推理质量。
+
+    程序化三维（事实性/完整性/合规）完全确定、可复现；推理质量需 --judge 显式启用。
+    任何确凿违规（schema 拒绝、事实性或合规 fail）以退出码 1 结束。
+    """
+    from .core.costs import CostLedger
+    from .evals.runner import discover_reports, run_eval
+
+    paths = discover_reports([Path(t).expanduser() for t in targets])
+    if not paths:
+        console.print("[red]未发现任何 report.json[/red]（目标应为文件或含 *-report.json 的目录）")
+        raise typer.Exit(code=1)
+
+    llm = judge_spec = ledger = None
+    if judge:
+        config = load_config(config_path)
+        if not config.anthropic_api_key:
+            console.print("[red]--judge 需要 ANTHROPIC_API_KEY[/red]，无法调用评审模型。")
+            raise typer.Exit(code=1)
+        from anthropic import Anthropic
+
+        from .agent.llm import ResilientLLM
+
+        client = Anthropic(
+            api_key=config.anthropic_api_key,
+            base_url=config.anthropic_base_url,
+            timeout=120.0,
+            max_retries=0,
+        )
+        llm = ResilientLLM(client)
+        judge_spec = ModelRouter(config.models).resolve("judge")
+        ledger = CostLedger(config.pricing)
+
+    with console.status(f"正在评测 {len(paths)} 份报告 ……"):
+        eval_report = run_eval(
+            paths, llm=llm, judge_spec=judge_spec, ledger=ledger, n_judge=n_judge
+        )
+
+    if output:
+        Path(output).expanduser().write_text(
+            eval_report.model_dump_json(indent=2), encoding="utf-8"
+        )
+    if json_output:
+        typer.echo(eval_report.model_dump_json(indent=2))
+    else:
+        _render_eval(eval_report)
+        if output:
+            console.print(f"[green]已落盘[/green] → {output}")
+
+    if eval_report.summary.get("hard_fail_cases"):
+        raise typer.Exit(code=1)
+
+
+def _render_eval(eval_report) -> None:  # noqa: ANN001
+    """终端分数报告：逐例一行 + 违规明细 + 汇总。"""
+
+    def _cell(dim) -> str:  # noqa: ANN001
+        if dim is None:
+            return "—"
+        if dim.status == "pass":
+            if dim.name == "reasoning" and dim.score is not None:
+                ci = f" ±({dim.ci95[0]}~{dim.ci95[1]})" if dim.ci95 else ""
+                return f"{dim.score}{ci}"
+            if dim.name == "completeness":
+                return f"[green]✓[/green] {dim.score:.2f}"
+            return "[green]✓[/green]"
+        if dim.status == "fail":
+            n = f"（{len(dim.hits)} 项）" if dim.hits else ""
+            with_score = dim.name == "completeness" and dim.score is not None
+            score = f" {dim.score:.2f}" if with_score else ""
+            return f"[red]✗{n}{score}[/red]"
+        if dim.status == "unverifiable":
+            return "[yellow]⚠ 不可核验[/yellow]"
+        return "[dim]跳过[/dim]"
+
+    table = Table(title="C1 评测分数报告", show_lines=False)
+    for col in ("报告", "标的", "档", "事实性", "完整性", "合规", "推理质量"):
+        table.add_column(col)
+    for case in eval_report.cases:
+        if case.error is not None:
+            table.add_row(
+                Path(case.report_path).name, "—", "—", "[red]schema 拒绝[/red]", "—", "—", "—"
+            )
+            continue
+        by_name = {d.name: d for d in case.dimensions}
+        table.add_row(
+            Path(case.report_path).name,
+            case.symbol or "—",
+            case.tier or "—",
+            _cell(by_name.get("factual")),
+            _cell(by_name.get("completeness")),
+            _cell(by_name.get("compliance")),
+            _cell(by_name.get("reasoning")),
+        )
+    console.print(table)
+
+    for case in eval_report.cases:
+        if case.error is not None:
+            console.print(f"[red]✗ {Path(case.report_path).name}[/red]：{case.error[:300]}")
+        for dim in case.dimensions:
+            if dim.status == "fail" and dim.name != "reasoning":
+                for hit in dim.hits[:5]:
+                    console.print(
+                        f"  [red]{Path(case.report_path).name} · {dim.name} · {hit.rule}[/red]："
+                        f"{hit.detail[:160]}"
+                    )
+                if len(dim.hits) > 5:
+                    console.print(f"  [dim]… 另有 {len(dim.hits) - 5} 项，见 --json 全文[/dim]")
+            elif dim.status == "unverifiable" and dim.note:
+                console.print(
+                    f"  [yellow]{Path(case.report_path).name} · {dim.name}[/yellow]：{dim.note}"
+                )
+
+    s = eval_report.summary
+    console.print(
+        f"[bold]汇总[/bold]：{eval_report.n_cases} 例 · 确凿不合格 {s.get('hard_fail_cases', 0)} 例"
+        f" · schema 拒绝 {s.get('error_cases', 0)} 例"
+    )
+    if eval_report.judge_meta:
+        meta = eval_report.judge_meta
+        cost = meta.get("cost", {})
+        console.print(
+            f"[dim]judge：{meta['model']} × {meta['n_judge']} 次/例"
+            f" · ${cost.get('total_usd', 0):.4f}（未知模型不计价）[/dim]"
+        )
+
+
 @app.command()
 def portfolio(
     symbols: list[str] = typer.Argument(..., help="多只股票代码，如 AAPL MSFT 600519"),  # noqa: B008

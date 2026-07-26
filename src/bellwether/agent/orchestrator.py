@@ -229,7 +229,10 @@ class Orchestrator:
                     )
                     trace.tool_calls.append(
                         ToolCallRecord(
-                            name="submit_report", input=dict(tool_input), output=outcome[:2000]
+                            name="submit_report",
+                            input=dict(tool_input),
+                            output=outcome[:2000],
+                            tool_use_id=tool_use_id,
                         )
                     )
                     _log.info("submit", accepted=result.report is not None)
@@ -265,7 +268,12 @@ class Orchestrator:
                 )
                 _log.info("tool_call", name=tool_name)
                 trace.tool_calls.append(
-                    ToolCallRecord(name=tool_name, input=dict(tool_input), output=output)
+                    ToolCallRecord(
+                        name=tool_name,
+                        input=dict(tool_input),
+                        output=output,
+                        tool_use_id=tool_use_id,
+                    )
                 )
                 tool_results.append(
                     {"type": "tool_result", "tool_use_id": tool_use_id, "content": output}
