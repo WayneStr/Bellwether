@@ -130,12 +130,20 @@ class Orchestrator:
         budget_usd = self.config.budget.deep_usd if deep else self.config.budget.quick_usd
         messages: list[dict] = [{"role": "user", "content": analyze_prompt(symbol, deep)}]
         tools = [*tools_mod.TOOL_SCHEMAS, SUBMIT_REPORT_TOOL]
+        # prompt caching（M2/RFC-003 D3）：system+tools 逐轮不变，缓存断点打在 tools 末尾
+        # （覆盖 tools+system 前缀）。中转不支持 cache_control 时经 [api].prompt_caching 关闭。
+        system_param: Any = SYSTEM_PROMPT
+        if self.config.api.prompt_caching:
+            system_param = [
+                {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
+            ]
+            tools = [*tools[:-1], {**tools[-1], "cache_control": {"type": "ephemeral"}}]
         submit_rejections = 0
         force_submit = False
 
         for _ in range(_MAX_TURNS):
             create_kwargs: dict[str, Any] = {
-                "system": SYSTEM_PROMPT,
+                "system": system_param,
                 "tools": tools,
                 "messages": messages,
             }
@@ -152,13 +160,24 @@ class Orchestrator:
             usage = getattr(resp, "usage", None)
             input_tokens = usage.input_tokens if usage is not None else 0
             output_tokens = usage.output_tokens if usage is not None else 0
-            ledger.record_llm(used.model, input_tokens, output_tokens, latency_s)
+            cache_read = (getattr(usage, "cache_read_input_tokens", 0) or 0) if usage else 0
+            cache_write = (getattr(usage, "cache_creation_input_tokens", 0) or 0) if usage else 0
+            ledger.record_llm(
+                used.model,
+                input_tokens,
+                output_tokens,
+                latency_s,
+                cache_read_tokens=cache_read,
+                cache_write_tokens=cache_write,
+            )
             trace.llm_calls.append(
                 LLMCallRecord(
                     model=used.model,
                     stop_reason=resp.stop_reason,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
+                    cache_read_tokens=cache_read,
+                    cache_write_tokens=cache_write,
                     latency_s=latency_s,
                 )
             )

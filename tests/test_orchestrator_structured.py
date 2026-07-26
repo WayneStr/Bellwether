@@ -159,3 +159,72 @@ def test_unstructured_fallback_is_flagged(orch):
     trace = json.loads(orch.last_trace_path.read_text(encoding="utf-8"))
     assert trace["outcome"] == "unstructured"
     assert orch.last_report_path is None  # 未经管道不产 report.json
+
+
+# ─────────────────────────── prompt caching（M2） ───────────────────────────
+def _end_turn(text="纯文本"):
+    msg = _Block(stop_reason="end_turn")
+    msg.content = [_Block(type="text", text=text)]
+    return msg
+
+
+def _orch_with(tmp_path, monkeypatch, config):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr("bellwether.core.trace.DEFAULT_TRACE_ROOT", tmp_path / "traces")
+    monkeypatch.setattr("bellwether.agent.orchestrator.DEFAULT_CAPTURE_ROOT", tmp_path / "cap")
+    monkeypatch.setattr(
+        "bellwether.agent.orchestrator.ProviderRegistry.for_symbol",
+        classmethod(lambda cls, s: FakeProvider()),
+    )
+    from bellwether.agent.orchestrator import Orchestrator
+
+    return Orchestrator(config)
+
+
+def test_prompt_caching_on_by_default(orch):
+    client = FakeClient([_end_turn(), _end_turn()])
+    orch.llm = ResilientLLM(client)
+    orch.analyze("600519", context=_ctx())
+
+    kwargs = client.calls[0]
+    # system 是块列表且带缓存断点；tools 末尾（submit_report）带缓存断点，其余不带
+    assert isinstance(kwargs["system"], list)
+    assert kwargs["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert kwargs["tools"][-1]["name"] == "submit_report"
+    assert kwargs["tools"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert all("cache_control" not in t for t in kwargs["tools"][:-1])
+    # 模块常量不得被注入污染（浅拷贝正确性）
+    from bellwether.ir.assemble import SUBMIT_REPORT_TOOL
+
+    assert "cache_control" not in SUBMIT_REPORT_TOOL
+
+
+def test_prompt_caching_can_be_disabled(tmp_path, monkeypatch):
+    from bellwether.config import ApiConfig, AppConfig
+
+    orch = _orch_with(tmp_path, monkeypatch, AppConfig(api=ApiConfig(prompt_caching=False)))
+    client = FakeClient([_end_turn(), _end_turn()])
+    orch.llm = ResilientLLM(client)
+    orch.analyze("600519", context=_ctx())
+
+    kwargs = client.calls[0]
+    assert isinstance(kwargs["system"], str)  # 关闭时保持 M1 形态
+    assert all("cache_control" not in t for t in kwargs["tools"])
+
+
+def test_cache_usage_recorded_in_trace_and_ledger(orch):
+    msg = _end_turn()
+    msg.usage = _Block(
+        input_tokens=100,
+        output_tokens=10,
+        cache_read_input_tokens=500,
+        cache_creation_input_tokens=200,
+    )
+    orch.llm = ResilientLLM(FakeClient([msg, _end_turn()]))
+    orch.analyze("600519", context=_ctx())
+
+    trace = json.loads(orch.last_trace_path.read_text(encoding="utf-8"))
+    assert trace["llm_calls"][0]["cache_read_tokens"] == 500
+    assert trace["llm_calls"][0]["cache_write_tokens"] == 200
+    assert orch.last_cost["total_cache_read_tokens"] == 500
+    assert orch.last_cost["total_cache_write_tokens"] == 200

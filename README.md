@@ -76,7 +76,7 @@ bellwether eval <...> --judge --n-judge 3               # 追加 LLM 推理质�
 ## 可靠性与溯源
 
 - **数据源**：异常按类型决定行为（连接/限流类退避重试，空数据立即失败）；单源熔断（连续失败后快速跳过，冷却自愈）；A股行情东财失败自动降级新浪。
-- **LLM**：限流/瞬态退避重试；模型持续不可用时自动降一档（`deep_report`→`synthesis`→`parse`，只换模型 id 不换任务参数），报告尾部**明示**降级；认证失败立即明示不掩盖。用户显式 `--model` 时不降级。
+- **LLM**：限流/瞬态退避重试；模型持续不可用时自动降一档（`deep_report`→`synthesis`→`parse`，只换模型 id 不换任务参数），报告尾部**明示**降级；认证失败立即明示不掩盖。用户显式 `--model` 时不降级。prompt caching 默认启用（system+tools 缓存断点，多轮 tool-use 大幅省 input token；中转不支持时 `[api] prompt_caching = false` 关闭），cache 读写 tokens 在成本摘要单列如实计价。
 - **溯源**：每次 `analyze` 落一份 provenance trace（输入哈希/prompt 版本/模型链/完整 tool 调用记录）到 `~/.bellwether/traces/`，成功失败都记录；输出与落盘文本统一脱敏（密钥零泄漏，见 `SECURITY.md`）。
 - **评测**：`bellwether eval` 对 report.json 四维判分——事实性（R1 裸数字重扫 + R7/R8 溯源逐位重算，程序化硬判）、完整性（分档机械清单）、合规（措辞规则层）、推理质量（`--judge` 启用 LLM 评审，n≥2 出 95% 置信区间）。程序化维度重复评分逐位一致；确凿违规退出码 1。
 

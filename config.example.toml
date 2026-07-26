@@ -19,12 +19,32 @@ params = { temperature = 0.2, max_tokens = 4096 }
 model = "claude-opus-4-8"
 params = { temperature = 0.3, max_tokens = 8192 }
 
+[models.judge]        # 评测评审员（bellwether eval --judge）；不参与降级链
+model = "claude-haiku-4-5-20251001"
+params = { temperature = 0.0, max_tokens = 1024 }
+
 # ── API 请求地址（可选）──────────────────────────────────────
 # 自定义 Anthropic API 地址：用于代理 / 中转 / 兼容网关。
 # 留空或删除本段 = 用官方默认 https://api.anthropic.com。
 # 也可用环境变量 ANTHROPIC_BASE_URL（config.toml 里的值优先级更高）。
 [api]
 # base_url = "https://your-proxy.example.com"
+# prompt_caching = true   # system+tools 加 cache_control；个别中转不支持时置 false
+
+# ── 定价覆盖（可选）──────────────────────────────────────────
+# 内置价目仅为官方占位；经中转的模型名与官方不同，必须在此登记才有准确金额，
+# 未登记的模型计 $0 并在成本摘要里列为 unknown（不瞎估）。
+# cache_read/write_per_mtok 不填时按官方比例（0.1× / 1.25× input）派生。
+# [pricing."your-relay-model-id"]
+# input_per_mtok = 3.0
+# output_per_mtok = 15.0
+# cache_read_per_mtok = 0.3
+# cache_write_per_mtok = 3.75
+
+# ── 单次分析成本硬上限（可选；ADR-0004 默认）─────────────────
+# [budget]
+# quick_usd = 0.35
+# deep_usd = 1.50
 
 # ── 数据 ─────────────────────────────────────────────────────
 [data]

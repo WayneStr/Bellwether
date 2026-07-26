@@ -152,9 +152,14 @@ def analyze(
             console.print(f"[dim]结构化报告（report.json）：{orch.last_report_path}[/dim]")
         if orch.last_cost:
             cost = orch.last_cost
-            tokens = cost["total_input_tokens"] + cost["total_output_tokens"]
+            cache_read = cost.get("total_cache_read_tokens", 0)
+            cache_write = cost.get("total_cache_write_tokens", 0)
+            tokens = (
+                cost["total_input_tokens"] + cost["total_output_tokens"] + cache_read + cache_write
+            )
+            cache_note = f"（cache 命中 {cache_read}）" if cache_read else ""
             console.print(
-                f"[dim]成本：{tokens} tokens / ${cost['total_usd']:.4f}"
+                f"[dim]成本：{tokens} tokens{cache_note} / ${cost['total_usd']:.4f}"
                 f"（price-book {cost['price_book_version']}；未知模型不计价）[/dim]"
             )
 

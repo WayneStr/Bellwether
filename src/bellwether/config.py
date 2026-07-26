@@ -19,6 +19,9 @@ from .models import ModelConfig
 class ApiConfig(BaseModel):
     # 自定义 Anthropic API 请求地址（代理 / 中转 / 兼容网关）。留空用官方默认。
     base_url: str | None = None
+    # prompt caching（M2）：system+tools 加 cache_control，多轮 tool-use 大幅省 input token。
+    # 个别中转不支持 cache_control 字段时置 false 关闭。
+    prompt_caching: bool = True
 
 
 class DataConfig(BaseModel):

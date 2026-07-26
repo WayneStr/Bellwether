@@ -48,6 +48,8 @@ class LLMCallRecord(BaseModel):
     stop_reason: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0  # prompt caching 命中（input_tokens 之外单列）
+    cache_write_tokens: int = 0
     latency_s: float | None = None
 
 

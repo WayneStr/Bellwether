@@ -130,3 +130,43 @@ def test_budget_exceeded_raises_before_next_llm_call(tmp_path, monkeypatch, ctx)
 
     data = orch.last_trace_path.read_text(encoding="utf-8")
     assert "error:BudgetExceededError" in data
+
+
+# ─────────────────────────── prompt caching 计价（M2） ───────────────────────────
+
+
+def test_cache_tokens_priced_by_official_ratio():
+    ledger = CostLedger()
+    # sonnet input $3/mtok → cache read 0.1×=$0.3、cache write 1.25×=$3.75
+    cost = ledger.record_llm(
+        "claude-sonnet-5", 0, 0, cache_read_tokens=1_000_000, cache_write_tokens=1_000_000
+    )
+    assert cost == pytest.approx(0.3 + 3.75)
+    assert ledger.total_cache_read_tokens == 1_000_000
+    assert ledger.total_cache_write_tokens == 1_000_000
+    assert ledger.summary()["total_cache_read_tokens"] == 1_000_000
+
+
+def test_cache_price_explicit_override_wins():
+    ledger = CostLedger(
+        {
+            "relay-model": {
+                "input_per_mtok": 2.0,
+                "output_per_mtok": 4.0,
+                "cache_read_per_mtok": 1.0,
+                "cache_write_per_mtok": 2.5,
+            }
+        }
+    )
+    cost = ledger.record_llm(
+        "relay-model", 0, 0, cache_read_tokens=1_000_000, cache_write_tokens=1_000_000
+    )
+    assert cost == pytest.approx(1.0 + 2.5)
+
+
+def test_unknown_model_cache_tokens_counted_but_not_priced():
+    ledger = CostLedger()
+    cost = ledger.record_llm("mystery", 0, 0, cache_read_tokens=1_000_000)
+    assert cost == 0.0
+    assert ledger.total_cache_read_tokens == 1_000_000  # tokens 如实累计
+    assert "mystery" in ledger.unknown_models
