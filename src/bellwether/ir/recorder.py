@@ -210,17 +210,29 @@ class ToolRecorder:
 
         confidence 恒为 "derived"；派生证据的 PIT 语义（是否/如何随输入证据的
         stale 状态传播）留待 M3 细化，本方法不处理传播规则。
+
+        pit_class 与 register_value 同规（S9）：cassette 会话必须落 "replay"
+        （first_seen_at/available_at 均 None），否则派生证据混入闭包会让整份
+        cassette 报告永远过不了 policy_pit 校验（2026-07-26 真实回放踩坑）。
         """
-        now = self.context.clock.now()
+        if self.context.capture_policy == "cassette":
+            pit_class: Literal["authoritative", "observed", "replay"] = "replay"
+            first_seen_at: datetime | None = None
+            available_at: datetime | None = None
+        else:
+            now = self.context.clock.now()
+            pit_class = "observed"
+            first_seen_at = now
+            available_at = now
         return self.evidence.register(
             metric_name=metric_name,
             kind=kind,
             value=value,
             unit=unit,
             currency=currency,
-            first_seen_at=now,
-            available_at=now,
-            pit_class="observed",
+            first_seen_at=first_seen_at,
+            available_at=available_at,
+            pit_class=pit_class,
             source=None,
             derivation=derivation,
             confidence="derived",

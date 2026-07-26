@@ -228,3 +228,26 @@ def test_cache_usage_recorded_in_trace_and_ledger(orch):
     assert trace["llm_calls"][0]["cache_write_tokens"] == 200
     assert orch.last_cost["total_cache_read_tokens"] == 500
     assert orch.last_cost["total_cache_write_tokens"] == 200
+
+
+# ─────────────── 同错止损（2026-07-26 真实回放踩坑：schema 级拒绝烧完轮次） ───────────────
+def test_identical_rejection_twice_fails_fast(orch):
+    from bellwether.core.exceptions import ToolError
+
+    bad_draft = {"sections": [{"title": "概览", "claims": ["股价上涨 30%"]}]}
+    client = FakeClient(
+        [
+            _tool_use("submit_report", bad_draft, "tu_s1"),
+            _tool_use("submit_report", bad_draft, "tu_s2"),
+        ]
+    )
+    orch.llm = ResilientLLM(client)
+
+    # 第二次提交产生逐字相同的拒绝原因 → 判定重写不可修复，立即失败而不是烧到 max_turns
+    with pytest.raises(ToolError, match="重写后原样复现"):
+        orch.analyze("600519", context=_ctx())
+    assert len(client.calls) == 2  # 只烧了 2 轮，不是 10 轮
+
+    trace = json.loads(orch.last_trace_path.read_text(encoding="utf-8"))
+    assert trace["outcome"] == "error:ToolError"
+    assert len(trace["tool_calls"]) == 2  # 两次 submit 均如实入 trace

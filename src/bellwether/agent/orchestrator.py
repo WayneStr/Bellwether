@@ -21,7 +21,7 @@ from ..config import AppConfig
 from ..core.capture import CaptureStore
 from ..core.context import AnalysisContext
 from ..core.costs import CostLedger
-from ..core.exceptions import BellwetherError, BudgetExceededError
+from ..core.exceptions import BellwetherError, BudgetExceededError, ToolError
 from ..core.trace import (
     DEFAULT_CAPTURE_ROOT,
     AnalysisTrace,
@@ -140,6 +140,7 @@ class Orchestrator:
             tools = [*tools[:-1], {**tools[-1], "cache_control": {"type": "ephemeral"}}]
         submit_rejections = 0
         force_submit = False
+        last_violations: list[str] | None = None
 
         for _ in range(_MAX_TURNS):
             create_kwargs: dict[str, Any] = {
@@ -256,6 +257,15 @@ class Orchestrator:
                     )
                     _log.info("submit", accepted=result.report is not None)
                     if result.report is None:
+                        # 止损（2026-07-26 回放踩坑）：连续两次逐字相同的拒绝原因，
+                        # 说明重写改变不了结果（多为管道级 schema 错误，LLM 无法修复）
+                        # ——继续烧轮次只浪费预算，立即诚实失败并留 trace 定位。
+                        if result.violations == last_violations:
+                            raise ToolError(
+                                "报告校验错误重写后原样复现（疑似管道实现缺陷，非草稿问题）："
+                                + "; ".join(result.violations)[:500]
+                            )
+                        last_violations = result.violations
                         submit_rejections += 1
                         tool_results.append(
                             {

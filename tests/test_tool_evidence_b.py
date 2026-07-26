@@ -297,3 +297,68 @@ def test_fundamentals_without_trace_keeps_dcf_raw_value(recorder):
     )
     assert isinstance(out["dcf_fair_value"], float)  # trace=None：M1 裸值形态不变
     assert recorder.bindings == []
+
+
+# ─────────────── cassette 会话的派生证据（2026-07-26 真实回放踩坑回归） ───────────────
+@pytest.fixture()
+def cassette_recorder(tmp_path):
+    context = AnalysisContext(as_of=AS_OF, capture_policy="cassette", clock=FrozenClock(AS_OF))
+    rec = ToolRecorder(
+        context=context, evidence=EvidenceStore("600519"), captures=CaptureStore(tmp_path)
+    )
+    rec.current_tool_call_id = "tc_1"
+    return rec
+
+
+def test_cassette_session_derived_evidence_is_replay(cassette_recorder):
+    """DCF derived 在 cassette 会话必须 replay：任何 observed 混入闭包都会让
+    整份 cassette 报告永远过不了 S9（all-replay）校验——LLM 重写无法修复。"""
+    out = json.loads(
+        tools_mod.execute_tool(
+            "get_fundamentals",
+            {"symbol": "600519"},
+            FakeProviderB(),
+            context=cassette_recorder.context,
+            trace=cassette_recorder,
+        )
+    )
+    dcf = cassette_recorder.evidence.get(out["dcf_fair_value"]["eid"])
+    assert dcf.pit_class == "replay"
+    assert dcf.available_at is None and dcf.first_seen_at is None
+    assert dcf.confidence == "derived"
+    # 全会话零 observed——S9 在证据源头成立
+    all_eids = [b.eid for b in cassette_recorder.bindings] + [dcf.eid]
+    for eid in all_eids:
+        assert cassette_recorder.evidence.get(eid).pit_class == "replay"
+
+
+def test_cassette_report_with_dcf_passes_policy_pit(cassette_recorder):
+    """组装级复现用户场景：引用 DCF 的 cassette 报告必须通过 StructuredReport 校验。"""
+    from bellwether.ir.assemble import assemble_report
+
+    out = json.loads(
+        tools_mod.execute_tool(
+            "get_fundamentals",
+            {"symbol": "600519"},
+            FakeProviderB(),
+            context=cassette_recorder.context,
+            trace=cassette_recorder,
+        )
+    )
+    dcf_eid = out["dcf_fair_value"]["eid"]
+    result = assemble_report(
+        {
+            "sections": [{"title": "估值", "claims": [f"DCF 模型公允价值为 [{dcf_eid}]"]}],
+            "risks": [f"估值高度依赖模型假设 [{dcf_eid}]"],
+        },
+        store=cassette_recorder.evidence,
+        context=cassette_recorder.context,
+        symbol="600519",
+        market="CN",
+        tier="quick",
+        model_versions={"synthesis": "m1"},
+        prompt_versions={"system": "abc"},
+        provenance_ref="trace-x",
+        data_types_present={"fundamentals"},
+    )
+    assert result.report is not None, result.violations
