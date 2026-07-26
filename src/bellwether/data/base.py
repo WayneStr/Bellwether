@@ -107,8 +107,22 @@ class MarketDataProvider(ABC):
         """市场差异（时区/涨跌停/结算）封装在这里。"""
 
     def resolve_symbol(self, query: str, *, context: AnalysisContext) -> str:
-        """名称/代码归一化，默认原样大写，子类可覆盖。"""
-        return query.strip().upper()
+        """名称/代码归一化，子类可覆盖。
+
+        LLM 传入的代码形态自由（00016.HK / 16.HK / 600519.SS），统一在此收敛：
+        去市场后缀、港股数字补零到 5 位。live 与 cassette 重放共用同一规则——
+        这是 cassette 键命中的前提（2026-07-26 smoke：'00016.HK' 全量 miss 踩坑）。
+        """
+        s = query.strip().upper()
+        head, _, suffix = s.partition(".")
+        if head.isdigit():
+            if suffix == "HK":
+                return head.zfill(5)
+            if suffix in ("SS", "SH", "SZ"):
+                return head
+            if not suffix and len(head) == 4:  # 无后缀 4 位数字：detect_market 同判 HK
+                return head.zfill(5)
+        return s
 
 
 class ProviderRegistry:

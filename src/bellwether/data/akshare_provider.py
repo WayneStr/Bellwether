@@ -160,9 +160,6 @@ class AkshareCNProvider(MarketDataProvider):
     def _to_code(symbol: str) -> str:
         return symbol.strip().upper().split(".")[0]  # 600519.SH -> 600519
 
-    def resolve_symbol(self, query: str, *, context: AnalysisContext) -> str:
-        return query.strip().upper()
-
     @datasource_retry
     def get_ohlcv(
         self,
@@ -242,9 +239,6 @@ class AkshareHKProvider(MarketDataProvider):
     @staticmethod
     def _to_code(symbol: str) -> str:
         return symbol.strip().upper().split(".")[0].zfill(5)  # 700 -> 00700
-
-    def resolve_symbol(self, query: str, *, context: AnalysisContext) -> str:
-        return query.strip().upper()
 
     @datasource_retry
     def get_ohlcv(
