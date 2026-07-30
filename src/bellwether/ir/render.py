@@ -83,7 +83,16 @@ def render_report(report: StructuredReport) -> str:
     if scan_naked_numbers(template):
         raise RuntimeError("render invariant violated: naked number in pre-substitution text")
 
-    def _sub(match: re.Match[str]) -> str:
-        return format_value(report.evidence[f"E{match.group(1)}"])
-
-    return _TOKEN.sub(_sub, template)
+    # 令牌替换：相邻令牌（模板里中间零字符，如某些模型把 [E1][E2][E3] 甩句尾）之间补一个
+    # 空格，避免数值连串（40.3245.872.68）。有空格/标点分隔的正常情形不受影响。
+    out: list[str] = []
+    cursor = 0
+    prev_token_end = -1
+    for match in _TOKEN.finditer(template):
+        out.append(template[cursor : match.start()])
+        if match.start() == prev_token_end:  # 与上一令牌紧邻，无分隔字符
+            out.append(" ")
+        out.append(format_value(report.evidence[f"E{match.group(1)}"]))
+        cursor = prev_token_end = match.end()
+    out.append(template[cursor:])
+    return "".join(out)

@@ -186,6 +186,24 @@ def test_render_r5_invariant_catches_dirty_template():
         render_report(bad)
 
 
+def test_render_spaces_adjacent_tokens():
+    """相邻令牌（某些模型把 [E1][E2] 甩句尾）渲染时补空格；已有分隔的正常情形不受影响。"""
+    store, e1, e2 = _store_with_evidence()
+    result = _assemble(_clean_draft(), store)
+    report = result.report
+    claim = (
+        report.sections[0]
+        .claims[0]
+        .model_copy(update={"text": "紧邻[E1][E2]；空格[E1] [E2]", "evidence_ids": ["E1", "E2"]})
+    )
+    section = report.sections[0].model_copy(update={"claims": [claim]})
+    patched = report.model_copy(update={"sections": [section, report.sections[1]]})
+    text = render_report(patched)
+    assert "1710.5 25.5" in text  # 相邻令牌间补了空格
+    assert "1710.525.5" not in text  # 未连串
+    assert "1710.5  25.5" not in text  # 已有空格的情形不产生双空格
+
+
 # ─────────── 畸形 draft 防御（2026-07-26 smoke：模型给裸字符串 section 炸 assemble） ───────────
 @pytest.mark.parametrize(
     "draft",
