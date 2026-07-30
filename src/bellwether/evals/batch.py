@@ -92,18 +92,10 @@ def run_batch(
 
     judge_llm = judge_spec = None
     if batch.judge:
-        from anthropic import Anthropic
-
-        from ..agent.llm import ResilientLLM
+        from ..agent.llm import ResilientLLM, build_llm_client
         from ..agent.router import ModelRouter
 
-        client = Anthropic(
-            api_key=config.anthropic_api_key,
-            base_url=config.anthropic_base_url,
-            timeout=120.0,
-            max_retries=0,
-        )
-        judge_llm = ResilientLLM(client)
+        judge_llm = ResilientLLM(build_llm_client(config, timeout=120.0))
         judge_spec = ModelRouter(config.models).resolve("judge")
 
     total_cost = 0.0

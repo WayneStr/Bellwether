@@ -7,7 +7,7 @@ import httpx
 from typer.testing import CliRunner
 
 from bellwether.cli import app
-from bellwether.config import KEYRING_SERVICE, KEYRING_USERNAME
+from bellwether.config import KEYRING_SERVICE
 from bellwether.core.exceptions import BellwetherError, ModelNotFoundError
 
 runner = CliRunner()
@@ -16,7 +16,8 @@ runner = CliRunner()
 def _no_api_key(monkeypatch):
     """清空环境变量 + 关闭钥匙串兜底，模拟未设置 API key（避免本机真实钥匙串干扰）。"""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.setattr("bellwether.config._keyring_get_api_key", lambda: None)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr("bellwether.config._keyring_get_api_key", lambda username=None: None)
 
 
 def _make_orchestrator(
@@ -165,7 +166,9 @@ def test_config_show_key_from_env(monkeypatch, tmp_path):
 
 def test_config_show_key_from_keyring(monkeypatch, tmp_path):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.setattr("bellwether.config._keyring_get_api_key", lambda: "keyring-key")
+    monkeypatch.setattr(
+        "bellwether.config._keyring_get_api_key", lambda username=None: "keyring-key"
+    )
     result = runner.invoke(app, ["config", "show", "--config", str(tmp_path / "nope.toml")])
     assert result.exit_code == 0
     assert "系统钥匙串" in result.output
@@ -185,9 +188,15 @@ def test_config_set_key_success(monkeypatch):
         "keyring.set_password",
         lambda service, username, value: calls.append((service, username, value)),
     )
-    result = runner.invoke(app, ["config", "set-key"], input="test-key\n")
+    # 显式 --provider，避免耦合仓库 config.toml 的 provider；两家 key 分槽存储。
+    result = runner.invoke(app, ["config", "set-key", "--provider", "anthropic"], input="a\n")
     assert result.exit_code == 0
-    assert calls == [(KEYRING_SERVICE, KEYRING_USERNAME, "test-key")]
+    assert calls == [(KEYRING_SERVICE, "anthropic_api_key", "a")]
+
+    calls.clear()
+    result = runner.invoke(app, ["config", "set-key", "--provider", "openai"], input="o\n")
+    assert result.exit_code == 0
+    assert calls == [(KEYRING_SERVICE, "openai_api_key", "o")]
 
 
 def test_config_set_key_empty_input_exits_1():

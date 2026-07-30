@@ -14,8 +14,6 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-from anthropic import Anthropic
-from anthropic.types import Message
 
 from ..config import AppConfig
 from ..core.capture import CaptureStore
@@ -39,7 +37,7 @@ from ..ir.render import render_report
 from ..ir.store import EvidenceStore
 from ..models import ModelSpec
 from . import tools as tools_mod
-from .llm import ResilientLLM
+from .llm import ResilientLLM, build_llm_client
 from .prompts import SYSTEM_PROMPT, analyze_prompt
 from .router import ModelRouter
 
@@ -64,12 +62,8 @@ class Orchestrator:
     def __init__(self, config: AppConfig):
         self.config = config
         self.router = ModelRouter(config.models)
-        self.client = Anthropic(
-            api_key=config.anthropic_api_key,
-            base_url=config.anthropic_base_url,  # None 时 SDK 用官方默认地址
-            timeout=_LLM_TIMEOUT_SECONDS,
-            max_retries=0,  # SDK 内置重试关闭：退避策略统一在 core/retry.py，可测可控
-        )
+        # provider 感知：openai→Responses 适配器 / anthropic→官方 SDK（见 llm.build_llm_client）
+        self.client = build_llm_client(config, timeout=_LLM_TIMEOUT_SECONDS)
         self.llm = ResilientLLM(self.client)
         self.last_trace_path: Path | None = None
         self.last_report_path: Path | None = None
@@ -330,7 +324,7 @@ def _finalize(text: str, primary_model: str, used_model: str) -> str:
     return text
 
 
-def _collect_text(resp: Message) -> str:
+def _collect_text(resp: Any) -> str:
     texts = [b for b in resp.content if getattr(b, "type", None) == "text"]
-    parts = [t.text for t in texts]  # type: ignore[union-attr]
+    parts = [t.text for t in texts]
     return "\n".join(parts).strip()

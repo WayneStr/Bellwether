@@ -17,10 +17,13 @@ from .models import ModelConfig
 
 
 class ApiConfig(BaseModel):
-    # 自定义 Anthropic API 请求地址（代理 / 中转 / 兼容网关）。留空用官方默认。
+    # LLM 供应商 API 形态："anthropic"（Messages API，含官方/Anthropic 兼容中转）
+    # 或 "openai"（chat/completions，含官方/OpenAI 格式中转）。决定客户端与 key 槽。
+    provider: str = "anthropic"
+    # 自定义 API 请求地址（代理 / 中转 / 兼容网关）。留空用该 provider 官方默认。
     base_url: str | None = None
     # prompt caching（M2）：system+tools 加 cache_control，多轮 tool-use 大幅省 input token。
-    # 个别中转不支持 cache_control 字段时置 false 关闭。
+    # 个别中转不支持 cache_control 字段时置 false 关闭。（OpenAI 端自动缓存，此开关无效）
     prompt_caching: bool = True
 
 
@@ -51,21 +54,51 @@ class AppConfig(BaseModel):
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
 
     # 密钥不进配置文件：环境变量优先，其次系统钥匙串（keyring，可选依赖）。
+    # 按 provider 选 env 变量与钥匙串槽，两家 key 互不干扰。
+    @property
+    def api_key(self) -> str | None:
+        return os.environ.get(provider_env_var(self.api.provider)) or _keyring_get_api_key(
+            provider_keyring_user(self.api.provider)
+        )
+
+    @property
+    def base_url(self) -> str | None:
+        # config 显式值 > provider 对应 *_BASE_URL 环境变量 > None（用官方默认）
+        return self.api.base_url or os.environ.get(provider_base_url_var(self.api.provider)) or None
+
+    # 向后兼容别名（历史调用点仍用 anthropic_* 命名；语义已 provider 感知）。
     @property
     def anthropic_api_key(self) -> str | None:
-        return os.environ.get("ANTHROPIC_API_KEY") or _keyring_get_api_key()
+        return self.api_key
 
     @property
     def anthropic_base_url(self) -> str | None:
-        # config.toml 显式设置优先，其次环境变量 ANTHROPIC_BASE_URL，最后 None（SDK 用官方默认）
-        return self.api.base_url or os.environ.get("ANTHROPIC_BASE_URL") or None
+        return self.base_url
 
 
 KEYRING_SERVICE = "bellwether"
-KEYRING_USERNAME = "anthropic_api_key"
+KEYRING_USERNAME = "anthropic_api_key"  # 向后兼容常量（= anthropic 槽）
+
+_ENV_KEY = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
+_ENV_BASE = {"anthropic": "ANTHROPIC_BASE_URL", "openai": "OPENAI_BASE_URL"}
+_KEYRING_USER = {"anthropic": "anthropic_api_key", "openai": "openai_api_key"}
 
 
-def _keyring_get_api_key() -> str | None:
+def provider_env_var(provider: str) -> str:
+    """provider 对应的 API key 环境变量名（未知 provider 回落 anthropic）。"""
+    return _ENV_KEY.get(provider, "ANTHROPIC_API_KEY")
+
+
+def provider_base_url_var(provider: str) -> str:
+    return _ENV_BASE.get(provider, "ANTHROPIC_BASE_URL")
+
+
+def provider_keyring_user(provider: str) -> str:
+    """provider 对应的钥匙串 username 槽（两家 key 隔离存储）。"""
+    return _KEYRING_USER.get(provider, KEYRING_USERNAME)
+
+
+def _keyring_get_api_key(username: str = KEYRING_USERNAME) -> str | None:
     """从系统钥匙串读 key（D6）。keyring 未安装或后端不可用（无桌面环境等）
     一律静默返回 None——钥匙串只是便利项，环境变量永远可用。"""
     try:
@@ -73,16 +106,16 @@ def _keyring_get_api_key() -> str | None:
     except ImportError:
         return None
     try:
-        return keyring.get_password(KEYRING_SERVICE, KEYRING_USERNAME)
+        return keyring.get_password(KEYRING_SERVICE, username)
     except Exception:
         return None
 
 
-def api_key_source() -> str:
-    """当前 key 的来源（诊断用，绝不返回 key 本身）：env / keyring / none。"""
-    if os.environ.get("ANTHROPIC_API_KEY"):
+def api_key_source(provider: str = "anthropic") -> str:
+    """指定 provider 的 key 来源（诊断用，绝不返回 key 本身）：env / keyring / none。"""
+    if os.environ.get(provider_env_var(provider)):
         return "env"
-    if _keyring_get_api_key():
+    if _keyring_get_api_key(provider_keyring_user(provider)):
         return "keyring"
     return "none"
 

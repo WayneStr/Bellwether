@@ -12,7 +12,13 @@ from rich.table import Table
 
 from .agent.prompts import DISCLAIMER
 from .agent.router import VALID_ROLES, ModelRouter
-from .config import KEYRING_SERVICE, KEYRING_USERNAME, api_key_source, load_config
+from .config import (
+    KEYRING_SERVICE,
+    api_key_source,
+    load_config,
+    provider_env_var,
+    provider_keyring_user,
+)
 from .core.context import AnalysisContext, FrozenClock, SystemClock
 from .core.exceptions import BellwetherError
 from .core.logging import setup_logging
@@ -76,9 +82,10 @@ def analyze(
     """分析单只股票。"""
     setup_logging(verbose)
     config = load_config(config_path)
-    if not config.anthropic_api_key:
-        console.print("[red]未检测到 ANTHROPIC_API_KEY 环境变量[/red]，无法调用模型。")
-        console.print("请先设置后重试，例如：[dim]export ANTHROPIC_API_KEY=sk-...[/dim]")
+    if not config.api_key:
+        env = provider_env_var(config.api.provider)
+        console.print(f"[red]未检测到 {env}[/red]（环境变量或钥匙串），无法调用模型。")
+        console.print(f"请先设置后重试：[dim]bellwether config set-key[/dim] 或 export {env}=…")
         raise typer.Exit(code=1)
 
     # 延迟 import：无 key 时不必加载 anthropic/yfinance
@@ -181,33 +188,48 @@ def config_show(
         table.add_row(role, spec.model, str(spec.params.temperature), str(spec.params.max_tokens))
     console.print(table)
 
-    source = api_key_source()
+    prov = config.api.provider
+    source = api_key_source(prov)
     key_state = {"env": "已设置（环境变量）", "keyring": "已设置（系统钥匙串）"}.get(
         source, "[red]未设置[/red]"
     )
-    console.print(f"ANTHROPIC_API_KEY：{key_state}")
-    console.print(
-        f"API 请求地址：{config.anthropic_base_url or '官方默认 https://api.anthropic.com'}"
-    )
+    default_base = "https://api.openai.com" if prov == "openai" else "https://api.anthropic.com"
+    console.print(f"Provider：{prov}")
+    console.print(f"API key（{provider_env_var(prov)}）：{key_state}")
+    console.print(f"API 请求地址：{config.base_url or '官方默认 ' + default_base}")
 
 
 @config_app.command("set-key")
-def config_set_key() -> None:
-    """把 API key 存入系统钥匙串（keyring）。环境变量 ANTHROPIC_API_KEY 始终优先。"""
+def config_set_key(
+    provider: str | None = typer.Option(
+        None, "--provider", help="anthropic | openai（缺省取 config 的 [api].provider）"
+    ),
+    config_path: str | None = typer.Option(None, "--config", help="指定 config.toml 路径"),
+) -> None:
+    """把 API key 存入系统钥匙串（keyring）。按 provider 分槽存储，两家 key 互不干扰。
+
+    对应环境变量（openai→OPENAI_API_KEY / anthropic→ANTHROPIC_API_KEY）存在时始终优先于钥匙串。
+    """
     try:
         import keyring
     except ImportError as exc:
         console.print("[red]未安装 keyring[/red]，请先：uv pip install 'bellwether[secure]'")
         raise typer.Exit(code=1) from exc
 
-    value = typer.prompt("请输入 API key（输入不回显）", hide_input=True).strip()
+    prov = provider or load_config(config_path).api.provider
+    if prov not in ("anthropic", "openai"):
+        console.print(f"[red]未知 provider {prov!r}[/red]（可选 anthropic | openai）")
+        raise typer.Exit(code=1)
+    username = provider_keyring_user(prov)
+
+    value = typer.prompt(f"请输入 {prov} 的 API key（输入不回显）", hide_input=True).strip()
     if not value:
         console.print("[red]输入为空，未保存。[/red]")
         raise typer.Exit(code=1)
-    keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, value)
+    keyring.set_password(KEYRING_SERVICE, username, value)
     console.print(
-        f"[green]已存入系统钥匙串[/green]（服务名 {KEYRING_SERVICE}）。"
-        "环境变量 ANTHROPIC_API_KEY 存在时优先于钥匙串。"
+        f"[green]已存入系统钥匙串[/green]（{KEYRING_SERVICE}/{username}）。"
+        f"环境变量 {provider_env_var(prov)} 存在时优先于钥匙串。"
     )
 
 
@@ -217,22 +239,22 @@ def models(
 ) -> None:
     """列出当前 API 地址下可用的模型 id（便于挑选填入 config.toml 或 --model）。"""
     config = load_config(config_path)
-    if not config.anthropic_api_key:
-        console.print("[red]未检测到 ANTHROPIC_API_KEY[/red]，无法查询模型列表。")
+    prov = config.api.provider
+    if not config.api_key:
+        console.print(f"[red]未检测到 {provider_env_var(prov)}[/red]，无法查询模型列表。")
         raise typer.Exit(code=1)
 
     import httpx  # anthropic 的依赖，一定已安装
 
-    base = (config.anthropic_base_url or "https://api.anthropic.com").rstrip("/")
+    default_base = "https://api.openai.com" if prov == "openai" else "https://api.anthropic.com"
+    base = (config.base_url or default_base).rstrip("/")
+    headers = (
+        {"Authorization": f"Bearer {config.api_key}"}
+        if prov == "openai"
+        else {"x-api-key": config.api_key, "anthropic-version": "2023-06-01"}
+    )
     try:
-        resp = httpx.get(
-            f"{base}/v1/models",
-            headers={
-                "x-api-key": config.anthropic_api_key,
-                "anthropic-version": "2023-06-01",
-            },
-            timeout=30,
-        )
+        resp = httpx.get(f"{base}/v1/models", headers=headers, timeout=30)
         resp.raise_for_status()
         payload = resp.json()
     except httpx.HTTPStatusError as exc:
@@ -438,20 +460,13 @@ def eval_reports(
     llm = judge_spec = ledger = None
     if judge:
         config = load_config(config_path)
-        if not config.anthropic_api_key:
-            console.print("[red]--judge 需要 ANTHROPIC_API_KEY[/red]，无法调用评审模型。")
+        if not config.api_key:
+            env = provider_env_var(config.api.provider)
+            console.print(f"[red]--judge 需要 {env}[/red]，无法调用评审模型。")
             raise typer.Exit(code=1)
-        from anthropic import Anthropic
+        from .agent.llm import ResilientLLM, build_llm_client
 
-        from .agent.llm import ResilientLLM
-
-        client = Anthropic(
-            api_key=config.anthropic_api_key,
-            base_url=config.anthropic_base_url,
-            timeout=120.0,
-            max_retries=0,
-        )
-        llm = ResilientLLM(client)
+        llm = ResilientLLM(build_llm_client(config, timeout=120.0))
         judge_spec = ModelRouter(config.models).resolve("judge")
         ledger = CostLedger(config.pricing)
 
@@ -571,8 +586,9 @@ def eval_run_command(
     batch-meta.json（配置/成本/逐轮失败清单）。失败例如实记录不重试不造分。
     """
     config = load_config(config_path)
-    if not config.anthropic_api_key:
-        console.print("[red]未检测到 ANTHROPIC_API_KEY[/red]（env 或 keyring），无法跑批。")
+    if not config.api_key:
+        env = provider_env_var(config.api.provider)
+        console.print(f"[red]未检测到 {env}[/red]（env 或 keyring），无法跑批。")
         raise typer.Exit(code=1)
 
     from .evals.batch import BatchConfig, run_batch

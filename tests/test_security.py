@@ -73,3 +73,37 @@ def test_keyring_backend_failure_is_tolerated(monkeypatch):
     monkeypatch.setattr("keyring.get_password", broken, raising=False)
     assert AppConfig().anthropic_api_key is None
     assert api_key_source() == "none"
+
+
+# ──────────────────── provider 感知（OpenAI 中转）────────────────────
+def test_openai_provider_reads_openai_env(monkeypatch):
+    """provider=openai 时读 OPENAI_API_KEY，不碰 ANTHROPIC_API_KEY。"""
+    monkeypatch.setenv("OPENAI_API_KEY", "oai-env")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anth-env")  # 不应被 openai 读到
+    cfg = AppConfig(api={"provider": "openai"})
+    assert cfg.api_key == "oai-env"
+    assert api_key_source("openai") == "env"
+
+
+def test_openai_provider_uses_openai_keyring_slot(monkeypatch):
+    """provider=openai 的钥匙串槽是 bellwether/openai_api_key，与 anthropic 槽隔离。"""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    seen: dict[str, tuple[str, str]] = {}
+
+    def fake_get(service, user):
+        seen["slot"] = (service, user)
+        return "oai-keyring"
+
+    monkeypatch.setattr("keyring.get_password", fake_get, raising=False)
+    cfg = AppConfig(api={"provider": "openai"})
+    assert cfg.api_key == "oai-keyring"
+    assert seen["slot"] == ("bellwether", "openai_api_key")
+    assert api_key_source("openai") == "keyring"
+
+
+def test_provider_default_is_anthropic_backcompat(monkeypatch):
+    """未配 provider 时默认 anthropic：api_key 别名与老属性同源，老行为不变。"""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anth-env")
+    cfg = AppConfig()
+    assert cfg.api.provider == "anthropic"
+    assert cfg.api_key == cfg.anthropic_api_key == "anth-env"

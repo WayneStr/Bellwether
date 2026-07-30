@@ -15,6 +15,7 @@ from typing import Any
 import anthropic
 from anthropic.types import Message
 
+from ..config import AppConfig
 from ..core.exceptions import (
     LLMAuthError,
     LLMConnectionError,
@@ -91,3 +92,23 @@ class ResilientLLM:
             )
         except anthropic.APIError as exc:
             raise translate_anthropic_error(exc) from exc
+
+
+def build_llm_client(config: AppConfig, *, timeout: float = 300.0) -> Any:
+    """按 [api].provider 选客户端：openai→Responses 适配器（httpx）；anthropic→官方 SDK。
+
+    二者都鸭子暴露 `.messages.create`，供 ResilientLLM 统一包裹；两侧的瞬态退避都归
+    core/retry.py（故 SDK 内置重试关闭），异常都翻译成同一套 LLMError。
+    """
+    if config.api.provider == "openai":
+        from .openai_adapter import OpenAIResponsesClient
+
+        return OpenAIResponsesClient(
+            api_key=config.api_key, base_url=config.base_url, timeout=timeout
+        )
+    return anthropic.Anthropic(
+        api_key=config.api_key,
+        base_url=config.base_url,
+        timeout=timeout,
+        max_retries=0,
+    )
