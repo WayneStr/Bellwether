@@ -27,6 +27,9 @@ from .models import EvalReport
 from .runner import run_eval
 from .stats import null_distribution
 
+# 连续失败到此阈值即判定端点持续中断、早停止损（避免对已宕中转空转重试数小时）。
+_OUTAGE_ABORT_THRESHOLD = 12
+
 
 @dataclass
 class BatchConfig:
@@ -100,6 +103,7 @@ def run_batch(
 
     total_cost = 0.0
     aborted: str | None = None
+    consecutive_failures = 0  # 跨轮累积；达阈值判定端点持续中断→早停
     eval_reports: list[EvalReport] = []
     runs_meta: list[dict[str, Any]] = []
 
@@ -120,13 +124,22 @@ def run_batch(
                 total_cost += cost
                 if error is not None:
                     failures.append({"symbol": symbol, "error": error[:300]})
+                    consecutive_failures += 1
                     log(f"run {run_idx}/{batch.k} · {symbol} FAIL（累计 ${total_cost:.2f}）")
                 else:
                     assert path is not None
                     paths.append(path)
+                    consecutive_failures = 0
                     log(f"run {run_idx}/{batch.k} · {symbol} ok（累计 ${total_cost:.2f}）")
                 if total_cost >= batch.budget_usd and aborted is None:
                     aborted = f"预算硬上限 ${batch.budget_usd:.2f} 已达（run {run_idx}），中止余下"
+                    pool.shutdown(cancel_futures=True)
+                    break
+                if consecutive_failures >= _OUTAGE_ABORT_THRESHOLD and aborted is None:
+                    aborted = (
+                        f"疑似端点持续中断：连续 {consecutive_failures} 例失败（run {run_idx}），"
+                        "早停止损（不对已宕端点空转重试数小时）"
+                    )
                     pool.shutdown(cancel_futures=True)
                     break
 

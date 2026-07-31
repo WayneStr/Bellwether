@@ -169,6 +169,29 @@ def test_run_batch_records_failures_and_continues(tmp_path, monkeypatch):
     assert "桩故障" in run1["failures"][0]["error"]
 
 
+def test_run_batch_early_aborts_on_sustained_outage(tmp_path, monkeypatch):
+    """端点持续中断（连续失败达阈值）→ 早停止损，不空转全部例子与后续轮。"""
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    syms = [f"S{i:02d}" for i in range(15)]  # 15 只，全失败（模拟上游宕机）
+    monkeypatch.setattr(batch_mod, "_analyze_one", _stub_analyze(reports, fail=set(syms)))
+    out = tmp_path / "out"
+    summary = run_batch(
+        AppConfig(),
+        BatchConfig(
+            cassette_root=_cassette_dir(tmp_path, syms),
+            out_dir=out,
+            k=5,
+            judge=False,
+            concurrency=1,  # 顺序完成，连续失败计数确定
+        ),
+    )
+    meta = summary["meta"]
+    assert meta["aborted"] is not None and "持续中断" in meta["aborted"]
+    assert len(meta["runs"]) == 1  # 第 1 轮就早停，不进后续轮
+    assert len(meta["runs"][0]["failures"]) < len(syms)  # 未把 15 只全跑完即止损
+
+
 # ─────────────────────────── null_distribution 单元 ───────────────────────────
 def _case_with_reasoning(symbol: str, score: float) -> CaseResult:
     return CaseResult(
