@@ -62,6 +62,24 @@ def test_dimension_score_skip_and_error():
     assert dimension_score(broken, "composite") == 0.0
 
 
+def test_dimension_score_excludes_unverifiable_reasoning():
+    """judge 调用失败（unverifiable、无分）→ reasoning 返回 None 排除，绝不当 0 分。"""
+    case = CaseResult(
+        report_path="X-report.json",
+        symbol="X",
+        market="US",
+        tier="quick",
+        dimensions=[
+            DimensionResult(name="factual", status="pass"),
+            DimensionResult(name="completeness", status="pass", score=1.0),
+            DimensionResult(name="compliance", status="pass"),
+            DimensionResult(name="reasoning", status="unverifiable", note="judge 调用失败"),
+        ],
+    )
+    assert dimension_score(case, "reasoning") is None  # 不是 0.0
+    assert dimension_score(case, "composite") == pytest.approx(100.0)  # 缺席不拉低
+
+
 # ─────────────────────────── bootstrap ───────────────────────────
 def test_bootstrap_reproducible_and_directional():
     degraded = [-20.0] * 20

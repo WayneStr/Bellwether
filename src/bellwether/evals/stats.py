@@ -36,7 +36,7 @@ def dimension_score(case: CaseResult, dimension: str) -> float | None:
     if dimension == "completeness":
         return (dim.score if dim.score is not None else 0.0) * 100
     if dimension == "reasoning":
-        return dim.score if dim.status == "pass" else 0.0
+        return dim.score  # 无有效 judge 分（调用失败）→ None 排除，绝不当质量 0 计
     return 100.0 if dim.status == "pass" else 0.0
 
 

@@ -315,7 +315,7 @@ def test_judge_single_run_has_no_ci(tmp_path):
     assert dim.status == "pass" and dim.score == 77.0 and dim.ci95 is None
 
 
-def test_judge_llm_failure_marks_dimension_fail(tmp_path):
+def test_judge_llm_failure_marks_dimension_unverifiable(tmp_path):
     report = _load_report(_make_session(tmp_path))
 
     class _Broken:
@@ -325,7 +325,8 @@ def test_judge_llm_failure_marks_dimension_fail(tmp_path):
     dim = judge_report(
         report, llm=_Broken(), spec=ModelSpec(model="judge-x"), ledger=CostLedger(), n_judge=2
     )
-    assert dim.status == "fail" and "judge 调用失败" in (dim.note or "")
+    # judge 调用失败 = 拿不到分（unverifiable），不是「质量 fail」——否则会以 0 分污染 null/门禁
+    assert dim.status == "unverifiable" and "judge 调用失败" in (dim.note or "")
 
 
 def test_run_eval_with_judge_attaches_meta(tmp_path):

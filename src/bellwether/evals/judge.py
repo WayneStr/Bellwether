@@ -2,7 +2,8 @@
 
 评审对象是渲染后的报告文本（用户可见形态）。judge 不重复核数——数字真实性
 已由 B 层程序化硬判，rubric 只评推理与呈现质量。judge 角色不降级（换评审模型
-= 评测可比性破坏），失败即把维度标 fail 并明示原因。
+= 评测可比性破坏）。judge **调用失败**（中转挂/未按契约提交）标 unverifiable 而非
+fail——那是「拿不到分」不是「质量 0」，须排除出统计，否则污染 null 与门禁。
 """
 
 from __future__ import annotations
@@ -78,7 +79,7 @@ def judge_report(
         except BellwetherError as exc:
             return DimensionResult(
                 name="reasoning",
-                status="fail",
+                status="unverifiable",
                 n=len(scores),
                 note=f"judge 调用失败（第 {i + 1} 次）：{type(exc).__name__}: {exc}",
             )
@@ -92,7 +93,7 @@ def judge_report(
         if block is None:
             return DimensionResult(
                 name="reasoning",
-                status="fail",
+                status="unverifiable",
                 n=len(scores),
                 note=f"judge 未按契约提交结构化评分（第 {i + 1} 次）",
             )
