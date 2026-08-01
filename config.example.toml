@@ -1,11 +1,15 @@
 # Bellwether 配置模板。复制为 config.toml 后按需修改；config.toml 不入库。
-# 密钥不放这里 —— 走环境变量 ANTHROPIC_API_KEY。
+# 密钥不放这里 —— 走环境变量（anthropic→ANTHROPIC_API_KEY / openai→OPENAI_API_KEY），
+# 或 `bellwether config set-key`（按 provider 存入系统钥匙串，两家 key 互不干扰）。
 
 # ── 模型配置（可自定义的核心）─────────────────────────────────
-# 角色化：轻任务用便宜模型，深度报告用强模型。model 可换成任意 Claude 模型 id：
-#   claude-opus-4-8 / claude-sonnet-5 / claude-haiku-4-5-20251001 / claude-fable-5
+# 角色化：轻任务用便宜模型，深度报告用强模型。模型名随 provider（见下 [api]）：
+#   anthropic → claude-opus-4-8 / claude-sonnet-5 / claude-haiku-4-5-20251001 …
+#   openai    → gpt-5.6-terra / gpt-5.5 …（Responses API）
+# 经中转时命名常与官方不同——用 `bellwether models` 查端点实际可用的 id。
 # 运行时还能用 CLI 覆盖：
 #   bellwether analyze AAPL --deep --model <id> --temperature 0.2
+# 下面是 anthropic 默认档；切 openai 时把四档 model 换成 gpt-* 即可。
 
 [models.parse]        # 轻量结构化（财报字段抽取、新闻解析）
 model = "claude-haiku-4-5-20251001"
@@ -23,17 +27,22 @@ params = { temperature = 0.3, max_tokens = 8192 }
 model = "claude-haiku-4-5-20251001"
 params = { temperature = 0.0, max_tokens = 1024 }
 
-# ── API 请求地址（可选）──────────────────────────────────────
-# 自定义 Anthropic API 地址：用于代理 / 中转 / 兼容网关。
-# 留空或删除本段 = 用官方默认 https://api.anthropic.com。
-# 也可用环境变量 ANTHROPIC_BASE_URL（config.toml 里的值优先级更高）。
+# ── 供应商与 API 请求地址 ────────────────────────────────────
+# provider 决定 API 形态与 key 槽：
+#   "anthropic" —— Messages API（官方或 Anthropic 兼容中转），模型名 claude-*
+#   "openai"    —— Responses API /v1/responses（官方或 OpenAI 格式中转），模型名 gpt-*
+# base_url 留空/删除 = 用该 provider 官方默认（api.anthropic.com / api.openai.com）。
+# 也可用环境变量 ANTHROPIC_BASE_URL / OPENAI_BASE_URL（config 里的值优先级更高）。
 [api]
-# base_url = "https://your-proxy.example.com"
-# prompt_caching = true   # system+tools 加 cache_control；个别中转不支持时置 false
+provider = "anthropic"
+# base_url = "https://your-relay.example.com"
+# prompt_caching = true   # anthropic：system+tools 加 cache_control（中转不支持时置 false）；
+#                         # openai 端自动缓存，此开关无效
 
 # ── 定价覆盖（可选）──────────────────────────────────────────
 # 内置价目仅为官方占位；经中转的模型名与官方不同，必须在此登记才有准确金额，
 # 未登记的模型计 $0 并在成本摘要里列为 unknown（不瞎估）。
+# ⚠️ 未登记时成本恒 $0，[budget] 硬上限也随之失效——要预算保护须登记单价。
 # cache_read/write_per_mtok 不填时按官方比例（0.1× / 1.25× input）派生。
 # [pricing."your-relay-model-id"]
 # input_per_mtok = 3.0
@@ -41,7 +50,7 @@ params = { temperature = 0.0, max_tokens = 1024 }
 # cache_read_per_mtok = 0.3
 # cache_write_per_mtok = 3.75
 
-# ── 单次分析成本硬上限（可选；ADR-0004 默认）─────────────────
+# ── 单次分析成本硬上限（可选；ADR-0004 默认；需 [pricing] 登记单价才生效）──
 # [budget]
 # quick_usd = 0.35
 # deep_usd = 1.50
