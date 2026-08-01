@@ -72,8 +72,8 @@ bellwether gate candidate.json --baseline baseline.json # 配对退化判定（b
 | 市场 | 行情 | 基本面 | 新闻 |
 |------|------|--------|------|
 | 美股 US | yfinance | yfinance | yfinance |
-| A股 CN | 东财 `stock_zh_a_hist` → 新浪 `stock_zh_a_daily`（降级链） | `stock_a_indicator_lg`（akshare 已移除，估值暂空 · M3 A9 修） | 东财 `stock_news_em` |
-| 港股 HK | 新浪 `stock_hk_daily` | （暂留空 · M3 A9 补） | 东财 `stock_news_em` |
+| A股 CN | 东财 `stock_zh_a_hist` → 新浪 `stock_zh_a_daily`（降级链） | 百度 `stock_zh_valuation_baidu`（PE/PB/市值） | 东财 `stock_news_em` |
+| 港股 HK | 新浪 `stock_hk_daily` | 百度 `stock_hk_valuation_baidu`（PE/PB/市值） | 东财 `stock_news_em` |
 
 > akshare 数据源在国内直连最稳。代码已对东财域自动绕过系统代理直连（`_bypass_proxy_for_eastmoney`），一般无需手动配代理规则；前提是本机能直连相应站点。
 

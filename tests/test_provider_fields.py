@@ -97,45 +97,58 @@ def test_yfinance_get_news_parses_nested_content_and_skips_missing_title(monkeyp
     assert items[0].published_at is not None
 
 
-# ─────────────────────────── akshare CN：get_fundamentals ───────────────────────────
-def test_akshare_cn_get_fundamentals_parses_indicator(monkeypatch, ctx):
+# ─────────────────────────── akshare CN：get_fundamentals（A9 百度估值）──────────────
+def _fake_baidu(vals):
+    """构造 stock_*_valuation_baidu 打桩：按 indicator 返回 (date,value) 序列，取末行。"""
+
+    def fake(symbol, indicator, period):
+        return pd.DataFrame({"date": ["2026-07-31", "2026-08-01"], "value": [0.0, vals[indicator]]})
+
+    return fake
+
+
+def test_akshare_cn_get_fundamentals_parses_baidu_valuation(monkeypatch, ctx):
     akshare = pytest.importorskip("akshare")
-
-    def fake_indicator(**kwargs):
-        return pd.DataFrame({"pe_ttm": [10.0, 12.5], "pb": [1.1, 1.3], "ps_ttm": [2.0, 2.2]})
-
-    # raising=False：本机装的 akshare 版本已不带 stock_a_indicator_lg 属性，
-    # 这里只验证「给定该接口标准返回，解析正确」，不依赖它在当前版本真实存在。
-    monkeypatch.setattr(akshare, "stock_a_indicator_lg", fake_indicator, raising=False)
+    vals = {"市盈率(TTM)": 20.4, "市净率": 6.2, "总市值": 16883.6}  # 总市值单位「亿」
+    monkeypatch.setattr(akshare, "stock_zh_valuation_baidu", _fake_baidu(vals), raising=False)
     fund = AkshareCNProvider().get_fundamentals("600519", context=ctx)
     assert fund.symbol == "600519"
     assert fund.currency == "CNY"
-    assert fund.pe == 12.5
-    assert fund.pb == 1.3
-    assert fund.ps == 2.2
+    assert fund.pe == 20.4
+    assert fund.pb == 6.2
+    assert fund.market_cap == pytest.approx(16883.6e8)  # 亿 → 原币
     assert fund.source == "akshare"
 
 
-def test_akshare_cn_get_fundamentals_exception_leaves_blank(monkeypatch, ctx):
+def test_akshare_cn_get_fundamentals_failure_warns_not_silent(monkeypatch, ctx):
     akshare = pytest.importorskip("akshare")
+    warned: list[str] = []
+    monkeypatch.setattr(
+        "bellwether.data.akshare_provider._log.warning",
+        lambda event, **kw: warned.append(event),
+    )
 
-    def boom(**kwargs):
+    def boom(symbol, indicator, period):
         raise RuntimeError("估值接口不稳")
 
-    monkeypatch.setattr(akshare, "stock_a_indicator_lg", boom, raising=False)
+    monkeypatch.setattr(akshare, "stock_zh_valuation_baidu", boom, raising=False)
     fund = AkshareCNProvider().get_fundamentals("600519", context=ctx)
-    assert fund.pe is None
-    assert fund.pb is None
-    assert fund.ps is None
+    assert fund.pe is None and fund.pb is None and fund.market_cap is None
     assert fund.currency == "CNY"
+    assert "baidu_valuation_failed" in warned  # A9：失败不再静默吞，逐项记警
 
 
-# ─────────────────────────── akshare HK：get_fundamentals ───────────────────────────
-def test_akshare_hk_get_fundamentals_returns_shell(ctx):
+# ─────────────────────────── akshare HK：get_fundamentals（A9 百度估值）──────────────
+def test_akshare_hk_get_fundamentals_parses_baidu_valuation(monkeypatch, ctx):
+    akshare = pytest.importorskip("akshare")
+    vals = {"市盈率(TTM)": 16.2, "市净率": 3.4, "总市值": 43207.6}
+    monkeypatch.setattr(akshare, "stock_hk_valuation_baidu", _fake_baidu(vals), raising=False)
     fund = AkshareHKProvider().get_fundamentals("00700", context=ctx)
     assert fund.symbol == "00700"
     assert fund.currency == "HKD"
-    assert fund.pe is None
+    assert fund.pe == 16.2
+    assert fund.pb == 3.4
+    assert fund.market_cap == pytest.approx(43207.6e8)
     assert fund.source == "akshare"
 
 

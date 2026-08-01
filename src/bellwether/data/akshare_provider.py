@@ -11,6 +11,7 @@ import socket
 from datetime import date
 
 import pandas as pd
+import structlog
 
 from ..core.circuit import breaker_for
 from ..core.context import AnalysisContext
@@ -24,6 +25,8 @@ from ..core.retry import datasource_retry
 from ..models import FundamentalData, NewsItem, TradingRules
 from .base import MarketDataProvider, ProviderRegistry, call_source
 from .cache import DEFAULT_TTL_DAYS, cached_dataframe
+
+_log = structlog.get_logger(__name__)
 
 _OHLCV_COLS = ["open", "high", "low", "close", "volume"]
 _CN_COL_MAP = {
@@ -72,6 +75,31 @@ def _f(value) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _baidu_valuation(fetch, code: str) -> tuple[float | None, float | None, float | None]:
+    """从百度股市通估值取 (pe_ttm, pb, market_cap)。A股/港股同一形态，只是 fetch 不同
+    （stock_zh_valuation_baidu / stock_hk_valuation_baidu）。总市值单位为「亿」→ ×1e8 归一到原币。
+
+    A9：逐指标独立抓取，任一失败**记 structlog 警告不静默吞**（此前 `except: pass` 让 A股/港股
+    估值长期空缺却无人知）；字段留 None、报告优雅降级，绝不因估值缺失炸掉整份分析。
+    """
+
+    def one(indicator: str) -> float | None:
+        try:
+            df = fetch(symbol=code, indicator=indicator, period="近一年")
+        except Exception as exc:  # noqa: BLE001 —— 网络/接口不稳，记警后留空
+            _log.warning(
+                "baidu_valuation_failed", code=code, indicator=indicator, error=str(exc)[:120]
+            )
+            return None
+        if df is None or df.empty or "value" not in df.columns:
+            _log.warning("baidu_valuation_empty", code=code, indicator=indicator)
+            return None
+        return _f(df.iloc[-1]["value"])
+
+    pe, pb, mc = one("市盈率(TTM)"), one("市净率"), one("总市值")
+    return pe, pb, (mc * 1e8 if mc is not None else None)
 
 
 def _normalize_hist(df: pd.DataFrame) -> pd.DataFrame:
@@ -201,23 +229,13 @@ class AkshareCNProvider(MarketDataProvider):
 
     def get_fundamentals(self, symbol: str, *, context: AnalysisContext) -> FundamentalData:
         ak = _require_akshare()
-        code = self._to_code(symbol)
-        pe = pb = ps = None
-        try:
-            ind = ak.stock_a_indicator_lg(symbol=code)
-            if ind is not None and not ind.empty:
-                last = ind.iloc[-1]
-                pe = _f(last.get("pe_ttm"))
-                pb = _f(last.get("pb"))
-                ps = _f(last.get("ps_ttm"))
-        except Exception:
-            pass  # akshare 估值接口不稳，拿不到就留空
+        pe, pb, market_cap = _baidu_valuation(ak.stock_zh_valuation_baidu, self._to_code(symbol))
         return FundamentalData(
             symbol=symbol,
             currency="CNY",
             pe=pe,
             pb=pb,
-            ps=ps,
+            market_cap=market_cap,
             fetched_at=context.clock.now(),
             source=self.source,
         )
@@ -275,10 +293,14 @@ class AkshareHKProvider(MarketDataProvider):
         return cached_dataframe(key, DEFAULT_TTL_DAYS, _load)
 
     def get_fundamentals(self, symbol: str, *, context: AnalysisContext) -> FundamentalData:
-        # 港股估值 akshare 接口未统一，先返回基础壳（估值待接入）
+        ak = _require_akshare()
+        pe, pb, market_cap = _baidu_valuation(ak.stock_hk_valuation_baidu, self._to_code(symbol))
         return FundamentalData(
             symbol=symbol,
             currency="HKD",
+            pe=pe,
+            pb=pb,
+            market_cap=market_cap,
             fetched_at=context.clock.now(),
             source=self.source,
         )
