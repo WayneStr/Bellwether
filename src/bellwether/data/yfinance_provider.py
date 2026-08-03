@@ -14,6 +14,7 @@ from ..core.retry import datasource_retry
 from ..models import FundamentalData, NewsItem, TradingRules
 from .base import MarketDataProvider, ProviderRegistry, call_source
 from .cache import DEFAULT_TTL_DAYS, cached_dataframe
+from .quality import validate_ohlcv
 
 _OHLCV_COLS = ["open", "high", "low", "close", "volume"]
 _HTTP_TIMEOUT = 30  # 秒；yfinance history 支持显式超时（spec-003：provider 拥有底层超时）
@@ -66,6 +67,7 @@ class YFinanceProvider(MarketDataProvider):
             df = call_source(breaker_for("yfinance", "history"), _fetch)
             # 真实捕获时刻随数据走（B8）：缓存命中时经 pickle 回填原值，不被误标为今天
             df.attrs["captured_at"] = context.clock.now().isoformat()
+            df, _ = validate_ohlcv(df, symbol=symbol, source="yfinance")  # A4 脏数据拦截
             return df
 
         return cached_dataframe(key, DEFAULT_TTL_DAYS, _load)

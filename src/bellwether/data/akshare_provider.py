@@ -25,6 +25,7 @@ from ..core.retry import datasource_retry
 from ..models import FundamentalData, NewsItem, TradingRules
 from .base import MarketDataProvider, ProviderRegistry, call_source
 from .cache import DEFAULT_TTL_DAYS, cached_dataframe
+from .quality import validate_ohlcv
 
 _log = structlog.get_logger(__name__)
 
@@ -276,6 +277,7 @@ class AkshareCNProvider(MarketDataProvider):
                 except BellwetherError as sina_err:
                     raise _merge_chain_error(em_err, sina_err) from sina_err
             df.attrs["captured_at"] = context.clock.now().isoformat()
+            df, _ = validate_ohlcv(df, symbol=symbol, source=df.attrs.get("upstream_source", ""))
             return df
 
         return cached_dataframe(key, DEFAULT_TTL_DAYS, _load)
@@ -348,6 +350,7 @@ class AkshareHKProvider(MarketDataProvider):
             df = call_source(breaker_for("sina", "kline_hk"), _fetch)
             df.attrs["upstream_source"] = "sina"
             df.attrs["captured_at"] = context.clock.now().isoformat()
+            df, _ = validate_ohlcv(df, symbol=symbol, source="sina")
             return df
 
         return cached_dataframe(key, DEFAULT_TTL_DAYS, _load)
