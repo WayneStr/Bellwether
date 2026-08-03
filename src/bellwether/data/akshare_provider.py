@@ -102,6 +102,59 @@ def _baidu_valuation(fetch, code: str) -> tuple[float | None, float | None, floa
     return pe, pb, (mc * 1e8 if mc is not None else None)
 
 
+def _pct_to_frac(value: float | None) -> float | None:
+    """百分数（10.06）→ 小数（0.1006）——fundamental._pct 展示时会再 ×100 还原。"""
+    return value / 100 if value is not None else None
+
+
+def _cn_financials(fetch, code: str, year: int) -> tuple[float | None, float | None, float | None]:
+    """新浪财务分析指标 → (eps, roe, gross_margins)。取最新报告期一行；roe/毛利率 %→小数。
+    失败/缺列记 structlog 警告不静默；nan 经 _f 归 None（如茅台此源无毛利率）。"""
+    try:
+        df = fetch(symbol=code, start_year=str(year - 1))
+    except Exception as exc:  # noqa: BLE001 —— 网络/接口不稳，记警后留空
+        _log.warning("cn_financials_failed", code=code, error=str(exc)[:120])
+        return None, None, None
+    if df is None or df.empty or "日期" not in df.columns:
+        _log.warning("cn_financials_empty", code=code)
+        return None, None, None
+    # 选最新「年报」（12-31）：季报的 eps/roe 是单季数，与年化/trailing 口径不可比、会误导
+    df = df.assign(_d=df["日期"].astype(str))
+    annual = df[df["_d"].str.endswith("-12-31")]
+    last = (annual if not annual.empty else df).sort_values("_d").iloc[-1]
+    return (
+        _f(last.get("摊薄每股收益(元)")),
+        _pct_to_frac(_f(last.get("净资产收益率(%)"))),
+        _pct_to_frac(_f(last.get("销售毛利率(%)"))),
+    )
+
+
+def _hk_financials(
+    fetch, code: str
+) -> tuple[float | None, float | None, float | None, float | None, float | None]:
+    """东财港股财务指标（本机间歇可达）→ (eps_ttm, roe, gross_margins, revenue, net_income)。
+    最新报告期在首行；roe/毛利率 %→小数。失败记警不静默、字段留 None、报告优雅降级。"""
+    try:
+        df = fetch(symbol=code, indicator="报告期")
+    except Exception as exc:  # noqa: BLE001 —— 东财港股接口本机间歇不可达
+        _log.warning("hk_financials_failed", code=code, error=str(exc)[:120])
+        return None, None, None, None, None
+    if df is None or df.empty or "REPORT_DATE" not in df.columns:
+        _log.warning("hk_financials_empty", code=code)
+        return None, None, None, None, None
+    # 选最新年报（REPORT_DATE 含 12-31）：季报的 roe/营收/净利是单季数、不可比
+    df = df.assign(_d=df["REPORT_DATE"].astype(str))
+    annual = df[df["_d"].str.contains("-12-31")]
+    last = (annual if not annual.empty else df).sort_values("_d").iloc[-1]
+    return (
+        _f(last.get("EPS_TTM")),
+        _pct_to_frac(_f(last.get("ROE_AVG"))),
+        _pct_to_frac(_f(last.get("GROSS_PROFIT_RATIO"))),
+        _f(last.get("OPERATE_INCOME")),
+        _f(last.get("HOLDER_PROFIT")),
+    )
+
+
 def _normalize_hist(df: pd.DataFrame) -> pd.DataFrame:
     """akshare 中文列 hist DataFrame → 标准 OHLCV（日期索引，丢弃价格缺失行）。"""
     if df is None or df.empty:
@@ -229,13 +282,20 @@ class AkshareCNProvider(MarketDataProvider):
 
     def get_fundamentals(self, symbol: str, *, context: AnalysisContext) -> FundamentalData:
         ak = _require_akshare()
-        pe, pb, market_cap = _baidu_valuation(ak.stock_zh_valuation_baidu, self._to_code(symbol))
+        code = self._to_code(symbol)
+        pe, pb, market_cap = _baidu_valuation(ak.stock_zh_valuation_baidu, code)
+        eps, roe, gross_margins = _cn_financials(
+            ak.stock_financial_analysis_indicator, code, context.clock.now().year
+        )
         return FundamentalData(
             symbol=symbol,
             currency="CNY",
             pe=pe,
             pb=pb,
             market_cap=market_cap,
+            eps=eps,
+            roe=roe,
+            gross_margins=gross_margins,
             fetched_at=context.clock.now(),
             source=self.source,
         )
@@ -294,13 +354,22 @@ class AkshareHKProvider(MarketDataProvider):
 
     def get_fundamentals(self, symbol: str, *, context: AnalysisContext) -> FundamentalData:
         ak = _require_akshare()
-        pe, pb, market_cap = _baidu_valuation(ak.stock_hk_valuation_baidu, self._to_code(symbol))
+        code = self._to_code(symbol)
+        pe, pb, market_cap = _baidu_valuation(ak.stock_hk_valuation_baidu, code)
+        eps, roe, gross_margins, revenue, net_income = _hk_financials(
+            ak.stock_financial_hk_analysis_indicator_em, code
+        )
         return FundamentalData(
             symbol=symbol,
             currency="HKD",
             pe=pe,
             pb=pb,
             market_cap=market_cap,
+            eps=eps,
+            roe=roe,
+            gross_margins=gross_margins,
+            revenue=revenue,
+            net_income=net_income,
             fetched_at=context.clock.now(),
             source=self.source,
         )
